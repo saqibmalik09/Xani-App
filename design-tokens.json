@@ -1,0 +1,61 @@
+{
+  "product": "$APP_NAME",
+  "source": "app-ui/Prepare Figma prompts",
+  "brandValues": "client-apps/brand.env",
+  "fonts": {
+    "ui": "Outfit",
+    "display": "Fraunces"
+  },
+  "dark": {
+    "background": "#07070F",
+    "foreground": "#F0EEFF",
+    "card": "#111124",
+    "primary": "#8B5CF6",
+    "primarySoft": "#A78BFA",
+    "accent": "#EC4899",
+    "accentSoft": "#F472B6",
+    "secondary": "#1A1A35",
+    "muted": "#1E1E38",
+    "mutedForeground": "#7C7CA8",
+    "dim": "#5C5C84",
+    "faint": "#4A4A72",
+    "cyan": "#22D3EE",
+    "gold": "#FCD34D",
+    "success": "#34D399",
+    "warning": "#F59E0B",
+    "live": "#EC4899"
+  },
+  "light": {
+    "background": "#FFFFFF",
+    "surface": "#F7F7F7",
+    "input": "#FAFAFA",
+    "text": "#111111",
+    "textSoft": "#555555",
+    "sub": "#888888",
+    "hint": "#999999",
+    "muted": "#AAAAAA",
+    "border": "#EBEBEB",
+    "borderStrong": "#DBDBDB",
+    "borderIcon": "#D0D0D0",
+    "disabled": "#E5E5E5",
+    "divider": "#E8E8E8"
+  },
+  "gradient": {
+    "brand": ["#8B5CF6", "#EC4899"],
+    "wordmark": ["#E2D9FF", "#F9D6EE"],
+    "mark": ["#A78BFA", "#F472B6"]
+  },
+  "radius": {
+    "sheet": 24,
+    "ctaDark": 18,
+    "ctaLight": 6,
+    "inputLight": 6,
+    "inputDark": 14,
+    "otp": 14
+  },
+  "layout": {
+    "baselineFrameWidth": 390,
+    "contentMaxWidth": 460,
+    "scaleClamp": [0.82, 1.18]
+  }
+}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Status-bar / tray small icon. Android requires a white silhouette on a
+  transparent background — full-colour favicons go on largeIcon instead.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM12,5.2c1.9,0 3.45,1.55 3.45,3.45S13.9,12.1 12,12.1 8.55,10.55 8.55,8.65 10.1,5.2 12,5.2zM12,19.4c-2.7,0 -5.1,-1.4 -6.45,-3.5 0.1,-2.15 4.3,-3.3 6.45,-3.3s6.35,1.15 6.45,3.3C17.1,18 14.7,19.4 12,19.4z" />
+</vector>

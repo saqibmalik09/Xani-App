@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      windowBackground matches the first Compose frame exactly, so the system launch
+      window hands over to the app with no flash and no perceived load step.
+    -->
+    <style name="Theme.App" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/brand_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">false</item>
+    </style>
+</resources>

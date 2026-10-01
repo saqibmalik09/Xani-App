@@ -1,0 +1,42 @@
+# Baseline profile: classes and methods on the cold-start path get compiled AOT at
+# install time instead of being interpreted then JIT-ed on first run. This is the
+# single largest cold-start win available to a Compose app (typically 20-30% off
+# time-to-first-frame), and it costs nothing at runtime.
+#
+# Flags: H = hot, S = startup, P = post-startup.
+#
+# These wildcard rules cover the whole auth path, which is by definition everything
+# that runs before the user sees content. Compose's own profiles ship inside the
+# AndroidX artifacts and are merged with this file by AGP.
+#
+# Replace this with a measured profile once there is a device farm: add a
+# `baselineProfile` Macrobenchmark module, run `./gradlew :app:generateBaselineProfile`
+# and commit its output here. A measured profile beats hand-written rules because it
+# also captures the platform and library frames we cannot name.
+
+HSPLapp/xani/MainActivity;->**(**)V
+HSPLapp/xani/MainActivity;-><init>()V
+
+HSPLapp/xani/ui/brand/Brand;->**(**)**
+HSPLapp/xani/ui/brand/Brand$Companion;->**(**)**
+HSPLapp/xani/ui/brand/LaunchTiming;->**(**)**
+
+HSPLapp/xani/ui/theme/**;->**(**)**
+HSPLapp/xani/ui/vector/**;->**(**)**
+HSPLapp/xani/ui/components/**;->**(**)**
+HSPLapp/xani/ui/brand/**;->**(**)**
+HSPLapp/xani/feature/auth/**;->**(**)**
+HSPLapp/xani/feature/main/**;->**(**)**
+HSPLapp/xani/feature/home/**;->**(**)**
+HSPLapp/xani/i18n/**;->**(**)**
+HSPLapp/xani/core/**;->**(**)**
+
+Lapp/xani/ui/theme/**;
+Lapp/xani/ui/vector/**;
+Lapp/xani/ui/components/**;
+Lapp/xani/ui/brand/**;
+Lapp/xani/feature/auth/**;
+Lapp/xani/feature/main/**;
+Lapp/xani/feature/home/**;
+Lapp/xani/i18n/**;
+Lapp/xani/core/**;

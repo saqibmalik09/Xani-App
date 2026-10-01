@@ -1,0 +1,115 @@
+# The Xcode project is generated, not committed: a 5,000-line pbxproj is the single
+# worst merge-conflict source on an iOS team, and generating it keeps the target
+# settings reviewable. Regenerate with `xcodegen` after adding files.
+#
+# There are deliberately zero package dependencies. Everything ships in the SDK, so
+# there is no third-party code to break on a new iOS release, nothing to audit for
+# supply-chain risk, and no launch-time dynamic framework loading.
+
+name: App
+
+options:
+  minimumXcodeGenVersion: "2.38"
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+  groupSortPosition: top
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    GCC_WARN_UNDECLARED_SELECTOR: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    OTHER_SWIFT_FLAGS: "-warn-long-function-bodies=200 -warn-long-expression-type-checking=200"
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      ONLY_ACTIVE_ARCH: YES
+      DEBUG_INFORMATION_FORMAT: dwarf
+    Release:
+      # Whole-module + thin LTO is what keeps first-frame time low; measure on a
+      # Release build, never on Debug.
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+      LLVM_LTO: YES_THIN
+      DEAD_CODE_STRIPPING: YES
+      STRIP_INSTALLED_PRODUCT: YES
+      DEPLOYMENT_POSTPROCESSING: YES
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      VALIDATE_PRODUCT: YES
+
+targets:
+  App:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    configFiles:
+      Debug: Config/Brand.xcconfig
+      Release: Config/Brand.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: App
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # No bitcode, no on-demand resources, no embedded frameworks: nothing to
+        # dynamic-link at launch.
+        ENABLE_BITCODE: NO
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleDisplayName: $(APP_NAME)
+        CFBundleName: $(APP_NAME)
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        BrandWordmark: $(APP_WORDMARK)
+        BrandTagline: $(APP_TAGLINE)
+        SplashMinimumMilliseconds: $(SPLASH_MIN_MS)
+        ApiBaseUrl: $(API_BASE_URL)
+        GoogleIosClientId: $(GOOGLE_IOS_CLIENT_ID)
+        UIUserInterfaceStyle: Automatic
+        UIViewControllerBasedStatusBarAppearance: true
+        ITSAppUsesNonExemptEncryption: false
+        # Solid-colour launch screen identical to the first rendered frame, so the
+        # handover from the system launch image is invisible.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        # Google OAuth redirect: com.googleusercontent.apps.<client-prefix>
+        # Resolved at runtime from GoogleIosClientId; CFBundleURLTypes must list
+        # the scheme. CI/local builds that set GOOGLE_IOS_CLIENT_ID should also
+        # inject the matching URL scheme (see Scripts/google-url-scheme.sh) or
+        # register it below once the client id is known.
+        CFBundleURLTypes:
+          - CFBundleURLName: GoogleSignIn
+            CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - $(GOOGLE_IOS_URL_SCHEME)
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Calls keep the mic/speaker alive when the user leaves the app mid-call.
+        UIBackgroundModes: [audio]
+        NSCameraUsageDescription: Take photos and video for chats, stories, and calls.
+        NSMicrophoneUsageDescription: Record voice messages and talk on calls.
+        NSLocationWhenInUseUsageDescription: Share your current location in chats.
+        NSPhotoLibraryUsageDescription: Share photos and videos from your library in chats.
+        NSPhotoLibraryAddUsageDescription: Save photos you capture in chats.
+        NSContactsUsageDescription: Choose a contact from your phone to send in chats.

@@ -1,0 +1,111 @@
+﻿import SwiftUI
+import UIKit
+
+enum ProfileFilter { case posts, locked, saved, liked }
+enum ProfileSort { case latest, popular }
+enum ProfileStatsKind { case following, followers, receiving }
+enum ProfileGender { case male, female, preferNot }
+enum ReceivingPeriod { case daily, weekly, monthly }
+enum ProfileRoute { case home, edit, settings, stats }
+
+struct ProfilePost: Identifiable {
+    let id: Int
+    let color: UInt32
+    let views: String
+    let rank: Float
+}
+
+struct ProfilePerson: Identifiable {
+    let id: String
+    let name: String
+    let handle: String
+    let initials: String
+    let tintA: UInt32
+    let tintB: UInt32
+    var mutual: Bool = false
+    var diamonds: String = ""
+}
+
+struct ProfileReceivingSummary {
+    let diamonds: String
+    let coins: String
+    let gifts: String
+}
+
+struct ProfileDraft {
+    var displayName: String
+    var username: String
+    var bio: String
+    var gender: ProfileGender
+    var status: String
+}
+
+/// Snapshot the screens render. Counters stay formatted strings because that is
+/// what a cell shows; balances arrive as integers and are formatted here.
+struct ProfileSnapshot {
+    var displayName: String
+    var username: String
+    var email: String
+    var bio: String
+    var status: String
+    var gender: ProfileGender
+    var verified: Bool
+    var following: String
+    var followers: String
+    var receiving: String
+    var coins: String
+    var diamonds: String
+    var beans: String
+    var balanceCoins: String
+    var usernameCooldownDays: Int
+    var posts: [ProfilePost]
+    var people: [ProfilePerson]
+    var receivingDaily: ProfileReceivingSummary
+    var receivingWeekly: ProfileReceivingSummary
+    var receivingMonthly: ProfileReceivingSummary
+}
+
+/// What the username field shows while the user types. `checking` is only ever
+/// seen on the first keystroke of a name not already answered this session.
+enum UsernameState {
+    case idle, checking, available, taken, invalid, reserved, current, cooldown, offline
+}
+
+/// Something the user must be told about a write that was already accepted on screen.
+enum ProfileNotice: Equatable {
+    case usernameLocked(daysLeft: Int)
+    case usernameTaken(username: String)
+    case saveFailed
+}
+
+enum ProfileTokens {
+    static let bg = Color.white
+    static let bg2 = Color(rgb: 0xF7F7F7)
+    static let text = Color(rgb: 0x111111)
+    static let sub = Color(rgb: 0x888888)
+    static let muted = Color(rgb: 0xBBBBBB)
+    static let border = Color(rgb: 0xEBEBEB)
+    static let borderStrong = Color(rgb: 0xDBDBDB)
+    static let hairline = Color(rgb: 0xF0F0F0)
+    static let rowLine = Color(rgb: 0xF5F5F5)
+    static let accent = Dark.primary
+    static let accentDeep = Color(rgb: 0x7C3AED)
+    static let accentSoft = Dark.primary.opacity(0.08)
+    static let accentWash = Dark.primary.opacity(0.1)
+    static let copyFlash = Color(rgb: 0x38BDF8)
+    static let avatarRing = Dark.primary
+    static let online = Color(rgb: 0x10B981)
+    static let danger = Color(rgb: 0xEF4444)
+    static let dangerSoft = Color(rgb: 0xEF4444).opacity(0.06)
+    static var cta: LinearGradient {
+        LinearGradient(colors: [Dark.primary, Dark.accent], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    static let scrim = Color.black.opacity(0.4)
+    static let sheetScrim = Color.black.opacity(0.35)
+}
+
+enum ProfileSaveResult {
+    case ok
+    case usernameLocked(daysLeft: Int)
+}
+

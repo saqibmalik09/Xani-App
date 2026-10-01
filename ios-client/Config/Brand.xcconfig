@@ -1,0 +1,23 @@
+// Brand values for the iOS target. Mirrors ../../brand.env; CI overrides these by
+// writing this file or by passing -xcconfig on the xcodebuild invocation.
+//
+// NOTE: xcconfig treats `//` as a comment, so URLs must be escaped as
+//       https:$()/$()/api.example.com
+
+APP_NAME = Xani
+APP_WORDMARK = xani
+APP_TAGLINE = Entertainment Reimagined
+
+APP_BUNDLE_ID = app.xani
+
+// Milliseconds the launch screen is held. Branding time is dead time.
+SPLASH_MIN_MS = 900
+
+API_BASE_URL =
+
+// Google Sign-In — iOS OAuth client id (….apps.googleusercontent.com).
+// Leave empty to hide / soft-fail the Google button. Also set GOOGLE_CLIENT_IDS
+// on the identity service to the same value (plus the Android web client id).
+GOOGLE_IOS_CLIENT_ID = 478634587205-kj50e24sv6buu7m66jhprl6ca73hk1ao.apps.googleusercontent.com
+// Derived scheme: com.googleusercontent.apps.<prefix-before-.apps.googleusercontent.com>
+GOOGLE_IOS_URL_SCHEME = com.googleusercontent.apps.478634587205-kj50e24sv6buu7m66jhprl6ca73hk1ao
