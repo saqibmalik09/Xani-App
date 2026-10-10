@@ -28,6 +28,8 @@ final class LiveFeed {
     private var onConnected: [Token: () -> Void] = [:]
     private var onResync: [Token: () -> Void] = [:]
     private var onNotice: [Token: (NoticeData) -> Void] = [:]
+    private var onReward: [Token: (RewardToast) -> Void] = [:]
+    private var onGifting: [Token: (GiftingUserEvent) -> Void] = [:]
     private var nextToken = 0
 
     private var holders = 0
@@ -81,6 +83,14 @@ final class LiveFeed {
     @discardableResult
     func listenNotices(_ f: @escaping (NoticeData) -> Void) -> Token { let t = token(); onNotice[t] = f; return t }
 
+    /// A live-time reward landed: the HUD toast and My Rewards refresh. Dedupe on ledgerId.
+    @discardableResult
+    func listenRewards(_ f: @escaping (RewardToast) -> Void) -> Token { let t = token(); onReward[t] = f; return t }
+
+    /// A gift the signed-in account received or sent, with today's running totals.
+    @discardableResult
+    func listenGifting(_ f: @escaping (GiftingUserEvent) -> Void) -> Token { let t = token(); onGifting[t] = f; return t }
+
     /// A post state learned from a direct response (text post, complete call)
     /// rather than the stream, fanned out on the same bus so the feed, the grid
     /// and the posting strip update from one event whichever path it took.
@@ -105,6 +115,8 @@ final class LiveFeed {
         onConnected[t] = nil
         onResync[t] = nil
         onNotice[t] = nil
+        onReward[t] = nil
+        onGifting[t] = nil
     }
 
     // MARK: - Holding
@@ -141,6 +153,8 @@ final class LiveFeed {
                 onCall: { ev in Task { @MainActor in self?.onCall.values.forEach { $0(ev) } } },
                 onProfileViews: { v in Task { @MainActor in self?.onProfileViews.values.forEach { $0(v) } } },
                 onNotice: { n in Task { @MainActor in self?.onNotice.values.forEach { $0(n) } } },
+                onReward: { r in Task { @MainActor in self?.onReward.values.forEach { $0(r) } } },
+                onGifting: { g in Task { @MainActor in self?.onGifting.values.forEach { $0(g) } } },
                 onOpen: { Task { @MainActor in self?.onConnected.values.forEach { $0() } } },
                 onResync: { Task { @MainActor in self?.onResync.values.forEach { $0() } } }
             )

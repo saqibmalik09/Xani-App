@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 import UIKit
 import Photos
 import Contacts
+import MetalKit
+import CoreImage
+import QuartzCore
 
 /// What kind of message a picked file becomes.
 ///
@@ -127,9 +130,11 @@ struct CameraPreview: UIViewRepresentable {
     var front: Bool
     var enabled: Bool
     var snap: CameraSnap? = nil
+    var lens: LensController? = nil
 
     func makeUIView(context: Context) -> PreviewView {
         let v = PreviewView()
+        v.lens = lens
         snap?.view = v
         if enabled { v.start(front: front) }
         return v
@@ -137,6 +142,7 @@ struct CameraPreview: UIViewRepresentable {
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         snap?.view = uiView
+        uiView.lens = lens
         if enabled { uiView.start(front: front) } else { uiView.stop() }
     }
 
@@ -144,9 +150,14 @@ struct CameraPreview: UIViewRepresentable {
         uiView.stop()
     }
 
-    final class PreviewView: UIView, AVCapturePhotoCaptureDelegate {
+    final class PreviewView: UIView, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
         private let session = AVCaptureSession()
         private let photoOut = AVCapturePhotoOutput()
+        private let videoOut = AVCaptureVideoDataOutput()
+        private let lensQueue = DispatchQueue(label: "xani.lens", qos: .userInteractive)
+        private let processor = LensProcessor()
+        private var metal: MTKView?
+        var lens: LensController?
         private var started = false
         var onShot: ((URL) -> Void)?
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
@@ -158,6 +169,7 @@ struct CameraPreview: UIViewRepresentable {
             clipsToBounds = true
             preview.frame = bounds
             preview.videoGravity = .resizeAspectFill
+            metal?.frame = bounds
         }
 
         func start(front: Bool) {
@@ -174,16 +186,60 @@ struct CameraPreview: UIViewRepresentable {
                 self.session.beginConfiguration()
                 self.session.inputs.forEach { self.session.removeInput($0) }
                 self.session.outputs.forEach { self.session.removeOutput($0) }
+                // HD preset: default session quality is soft when stretched full-screen.
+                if self.session.canSetSessionPreset(.hd1920x1080) {
+                    self.session.sessionPreset = .hd1920x1080
+                } else if self.session.canSetSessionPreset(.hd1280x720) {
+                    self.session.sessionPreset = .hd1280x720
+                }
                 let pos: AVCaptureDevice.Position = front ? .front : .back
                 if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: pos),
                    let input = try? AVCaptureDeviceInput(device: device),
                    self.session.canAddInput(input) {
                     self.session.addInput(input)
+                    // Continuous 3A + low-light boost: tracks focus/exposure as
+                    // the scene changes and brightens dim rooms automatically.
+                    if (try? device.lockForConfiguration()) != nil {
+                        if device.isFocusModeSupported(.continuousAutoFocus) {
+                            device.focusMode = .continuousAutoFocus
+                        }
+                        if device.isExposureModeSupported(.continuousAutoExposure) {
+                            device.exposureMode = .continuousAutoExposure
+                        }
+                        if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                            device.whiteBalanceMode = .continuousAutoWhiteBalance
+                        }
+                        if device.isLowLightBoostSupported {
+                            device.automaticallyEnablesLowLightBoostWhenAvailable = true
+                        }
+                        device.isSubjectAreaChangeMonitoringEnabled = true
+                        device.videoZoomFactor = 1.0
+                        device.unlockForConfiguration()
+                    }
                 }
                 if self.session.canAddOutput(self.photoOut) {
                     self.session.addOutput(self.photoOut)
                 }
+                if self.lens != nil {
+                    self.videoOut.alwaysDiscardsLateVideoFrames = true
+                    self.videoOut.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                    self.videoOut.setSampleBufferDelegate(self, queue: self.lensQueue)
+                    if self.session.canAddOutput(self.videoOut) {
+                        self.session.addOutput(self.videoOut)
+                    }
+                    if let conn = self.videoOut.connection(with: .video) {
+                        if conn.isVideoOrientationSupported { conn.videoOrientation = .portrait }
+                        if conn.isVideoMirroringSupported { conn.isVideoMirrored = front }
+                    }
+                }
                 self.session.commitConfiguration()
+                DispatchQueue.main.async {
+                    if let conn = self.preview.connection, conn.isVideoOrientationSupported {
+                        conn.videoOrientation = .portrait
+                    }
+                    self.preview.videoGravity = .resizeAspectFill
+                    self.bindMetal(on: self.lens != nil)
+                }
                 self.session.startRunning()
             }
         }
@@ -200,9 +256,52 @@ struct CameraPreview: UIViewRepresentable {
             photoOut.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
         }
 
+        private func bindMetal(on: Bool) {
+            preview.isHidden = on
+            if on {
+                if metal == nil, let device = MTLCreateSystemDefaultDevice() {
+                    let v = MTKView(frame: bounds, device: device)
+                    v.framebufferOnly = false
+                    v.isPaused = true
+                    v.enableSetNeedsDisplay = false
+                    v.contentMode = .scaleAspectFill
+                    v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                    insertSubview(v, at: 0)
+                    metal = v
+                }
+                metal?.isHidden = false
+                metal?.frame = bounds
+            } else {
+                metal?.isHidden = true
+            }
+        }
+
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            guard let lens, let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            var image = CIImage(cvPixelBuffer: pixel)
+            let state = lens.state
+            image = processor.apply(image, state: state, front: currentFront == true)
+            guard let metal, let layer = metal.layer as? CAMetalLayer else { return }
+            let scale = max(layer.contentsScale, 1)
+            let size = CGSize(width: metal.bounds.width * scale, height: metal.bounds.height * scale)
+            if size.width < 2 || size.height < 2 { return }
+            layer.framebufferOnly = false
+            layer.drawableSize = size
+            guard let drawable = layer.nextDrawable() else { return }
+            processor.render(image, to: drawable, size: size)
+        }
+
         func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
             guard let data = photo.fileDataRepresentation() else { return }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("cap_\(UUID().uuidString).jpg")
+            if let lens, !lens.state.identity, let ci = CIImage(data: data) {
+                let out = processor.apply(ci, state: lens.state, front: currentFront == true)
+                if let jpeg = processor.jpeg(out) {
+                    try? jpeg.write(to: url, options: .atomic)
+                    DispatchQueue.main.async { self.onShot?(url) }
+                    return
+                }
+            }
             try? data.write(to: url, options: .atomic)
             DispatchQueue.main.async { self.onShot?(url) }
         }

@@ -73,10 +73,6 @@ internal class SessionStore(context: Context) {
     fun loadActiveAccess(): Access =
         loadAccounts().firstOrNull { it.userId == activeUserId() }?.access ?: Access.None
 
-    fun clearAll() {
-        prefs.edit().clear().apply()
-    }
-
     private fun migrateLegacyIfNeeded() {
         if (prefs.contains(KEY_ACCOUNTS)) return
         val access = prefs.getString(KEY_ACCESS, null) ?: return

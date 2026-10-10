@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { mediaUrl, useAuth } from '../lib/auth'
-import { rolesApi } from '../lib/roles'
+import { rolesApi, visibleRolesForContext, type RoleView } from '../lib/roles'
 
 type NavLeaf = {
   to: string
@@ -43,7 +43,40 @@ const NAV: NavEntry[] = [
       { to: '/restrictions', label: 'Restrictions', perm: 'admin.manage_users' },
     ],
   },
-  { kind: 'link', to: '/live', label: 'Live', perm: 'admin.manage_live' },
+  {
+    kind: 'group',
+    id: 'live',
+    label: 'Live',
+    children: [
+      { to: '/live', label: 'Rooms', perm: 'admin.manage_live' },
+      { to: '/live-time', label: 'Live time', perm: 'live.view_time', end: true },
+      { to: '/live-time/audit', label: 'Time audit', perm: 'live.view_time' },
+    ],
+  },
+  {
+    kind: 'group',
+    id: 'live-rewards',
+    label: 'Live rewards',
+    children: [
+      { to: '/live-rewards', label: 'Health', perm: 'reward.view', end: true },
+      { to: '/live-rewards/payouts', label: 'Payouts', perm: 'reward.view' },
+      { to: '/live-rewards/stats', label: 'Daily · Weekly · Monthly', perm: 'reward.view' },
+      { to: '/live-rewards/campaigns', label: 'Campaigns', perm: 'reward.view' },
+      { to: '/live-rewards/findings', label: 'Findings', perm: 'reward.view' },
+    ],
+  },
+  {
+    kind: 'group',
+    id: 'gifting',
+    label: 'Gifting',
+    children: [
+      { to: '/gifting', label: 'Overview', perm: 'gift.view', end: true },
+      { to: '/gifting/policies', label: 'Policies', perm: 'gift.view' },
+      { to: '/gifting/catalog', label: 'Catalog tree', perm: 'gift.view' },
+      { to: '/gifting/records', label: 'Records', perm: 'gift.view' },
+      { to: '/settings/gifting', label: 'Settings', perm: 'admin.manage_settings' },
+    ],
+  },
   {
     kind: 'group',
     id: 'catalog',
@@ -67,11 +100,23 @@ const NAV: NavEntry[] = [
   {
     kind: 'group',
     id: 'payouts',
-    label: 'Payouts',
+    label: 'Money',
     children: [
+      { to: '/recharge', label: 'Recharge', perm: 'finance.manage_recharge' },
       { to: '/withdrawals', label: 'Withdrawals', perm: 'finance.manage_withdrawals' },
       { to: '/payment-methods', label: 'Payment methods', perm: 'finance.manage_withdrawals' },
       { to: '/dollar-rates', label: 'Dollar rates', perm: 'finance.manage_coin_rates' },
+    ],
+  },
+  {
+    kind: 'group',
+    id: 'sellers',
+    label: 'Coin sellers',
+    children: [
+      { to: '/sellers', label: 'Sellers', anyOf: ['sellers.manage', 'sellers.view'], end: true },
+      { to: '/sellers/transactions', label: 'Transactions', anyOf: ['sellers.manage', 'sellers.view'] },
+      { to: '/sellers/disputes', label: 'Disputes', anyOf: ['sellers.manage', 'sellers.view'] },
+      { to: '/settings/sellers', label: 'Settings', anyOf: ['sellers.manage', 'admin.manage_settings'] },
     ],
   },
   {
@@ -83,6 +128,9 @@ const NAV: NavEntry[] = [
       { to: '/members', label: 'Members', perm: 'memberships.view' },
       { to: '/roles', label: 'Roles', perm: 'roles.view' },
       { to: '/permissions', label: 'Permissions', perm: 'admin.manage_permissions' },
+      { to: '/feature-access', label: 'Feature access', perm: 'access.manage_features' },
+      { to: '/contact-sync', label: 'Contact sync', perm: 'contacts.view_sync' },
+      { to: '/app-versions', label: 'App versions', perm: 'app.manage_versions' },
       { to: '/audit', label: 'Audit trail', perm: 'audit.view' },
     ],
   },
@@ -128,6 +176,7 @@ export function Shell() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(loadOpenGroups)
   const [accountOpen, setAccountOpen] = useState(false)
   const [pending, setPending] = useState(0)
+  const [roles, setRoles] = useState<RoleView[]>([])
   const accountRef = useRef<HTMLDivElement>(null)
   const user = session?.user
   const face = mediaUrl(mediaBase, user?.avatar_url || '')
@@ -154,6 +203,24 @@ export function Shell() {
       window.clearInterval(id)
     }
   }, [canApprove, active?.membership_id, location.pathname])
+
+  // Dynamic "Roles" nav: one entry per role in the current context, refreshed
+  // when the acting membership changes. Only loaded for people who can browse
+  // members, since each entry opens the (perm-gated) Members list.
+  const canBrowseRoles = can('roles.view') && can('memberships.view')
+  useEffect(() => {
+    if (!canBrowseRoles) {
+      setRoles([])
+      return
+    }
+    let cancelled = false
+    void rolesApi.list().then((r) => {
+      if (!cancelled && r.ok) setRoles(r.data.items || [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [canBrowseRoles, active?.membership_id])
 
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
@@ -194,7 +261,7 @@ export function Shell() {
   }, [accountOpen])
 
   const entries = useMemo(() => {
-    return NAV.map((entry) => {
+    const base = NAV.map((entry) => {
       if (entry.kind === 'link') {
         return leafVisible(entry, can, hasMembership) ? entry : null
       }
@@ -202,7 +269,26 @@ export function Shell() {
       if (children.length === 0) return null
       return { ...entry, children }
     }).filter(Boolean) as NavEntry[]
-  }, [can, hasMembership])
+
+    if (canBrowseRoles) {
+      const visible = visibleRolesForContext(roles, active, canPlatform)
+      if (visible.length > 0) {
+        const group: NavEntry = {
+          kind: 'group',
+          id: 'roles-directory',
+          label: 'Roles',
+          children: visible.map((r) => ({
+            to: `/members?role=${encodeURIComponent(r.slug)}`,
+            label: `${r.title} · ${(r.member_count || 0).toLocaleString()}`,
+          })),
+        }
+        const idx = base.findIndex((e) => e.kind === 'group' && e.id === 'organization')
+        if (idx < 0) base.push(group)
+        else base.splice(idx + 1, 0, group)
+      }
+    }
+    return base
+  }, [can, hasMembership, canBrowseRoles, roles, active, canPlatform])
 
   const renderLabel = (leaf: NavLeaf) => (
     <span className="admin-nav-label">
@@ -262,8 +348,10 @@ export function Shell() {
               )
             }
 
-            const childActive = entry.children.some(
-              (c) => location.pathname === c.to || location.pathname.startsWith(c.to + '/'),
+            const childActive = entry.children.some((c) =>
+              c.to.includes('?')
+                ? location.pathname + location.search === c.to
+                : location.pathname === c.to || location.pathname.startsWith(c.to + '/'),
             )
             const expanded = childActive || !!openGroups[entry.id]
 
@@ -273,9 +361,14 @@ export function Shell() {
                 <NavLink
                   key={child.to}
                   to={child.to}
+                  end={child.end}
                   title={child.label}
                   onClick={closeMobile}
-                  className={({ isActive }) => (isActive ? 'admin-nav-link is-active' : 'admin-nav-link')}
+                  className={({ isActive }) =>
+                    (child.to.includes('?') ? location.pathname + location.search === child.to : isActive)
+                      ? 'admin-nav-link is-active'
+                      : 'admin-nav-link'
+                  }
                 >
                   {renderLabel(child)}
                 </NavLink>
@@ -299,10 +392,13 @@ export function Shell() {
                       <NavLink
                         key={child.to}
                         to={child.to}
+                        end={child.end}
                         title={child.label}
                         onClick={closeMobile}
                         className={({ isActive }) =>
-                          isActive ? 'admin-nav-link admin-nav-child is-active' : 'admin-nav-link admin-nav-child'
+                          (child.to.includes('?') ? location.pathname + location.search === child.to : isActive)
+                            ? 'admin-nav-link admin-nav-child is-active'
+                            : 'admin-nav-link admin-nav-child'
                         }
                       >
                         {renderLabel(child)}

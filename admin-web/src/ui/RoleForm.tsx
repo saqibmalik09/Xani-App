@@ -4,7 +4,7 @@
  * live preview here; the mobile apps render the identical schema).
  */
 import { useMemo, useState } from 'react'
-import { FIELD_TYPES, type FieldType, type FormField } from '../lib/roles'
+import { FIELD_TYPES, normalizePhoneValue, phoneLikeField, type FieldType, type FormField } from '../lib/roles'
 import { useCountries } from '../pages/PaymentMethods'
 import { Button } from './Button'
 import { Field, TextArea } from './Field'
@@ -193,6 +193,12 @@ export function validateAnswers(fields: FormField[], answers: Record<string, unk
       if (f.required) errors[f.key] = `${f.label} is required.`
       continue
     }
+    if (phoneLikeField(f)) {
+      if (!normalizePhoneValue(str)) {
+        errors[f.key] = 'Enter a valid phone number with country code (e.g. +923001234567).'
+      }
+      continue
+    }
     switch (f.type) {
       case 'text':
       case 'textarea':
@@ -208,9 +214,6 @@ export function validateAnswers(fields: FormField[], answers: Record<string, unk
       }
       case 'dropdown':
         if (!(f.options || []).includes(str)) errors[f.key] = 'Choose one of the options.'
-        break
-      case 'phone':
-        if (!/^\+?[0-9][0-9 ()-]{5,19}$/.test(str)) errors[f.key] = 'Enter a phone number with country code.'
         break
       case 'country':
         if (!/^[A-Za-z]{2}$/.test(str)) errors[f.key] = 'Pick a country.'
@@ -248,6 +251,7 @@ export function DynamicForm({
           case 'number':
             return <Field key={f.key} label={label} hint={f.hint} error={err} type="number" value={value[f.key] || ''} disabled={disabled} min={f.min ?? undefined} max={f.max ?? undefined} onChange={(e) => set(f.key, e.target.value)} />
           case 'phone':
+          case 'whatsapp':
             return <Field key={f.key} label={label} hint={f.hint || 'Include the country code, e.g. +92 300 1234567'} error={err} type="tel" value={value[f.key] || ''} disabled={disabled} onChange={(e) => set(f.key, e.target.value)} />
           case 'dropdown':
             return (

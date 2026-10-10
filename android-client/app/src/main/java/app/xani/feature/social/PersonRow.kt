@@ -26,6 +26,7 @@ import app.xani.core.media.RemoteImage
 import app.xani.core.net.MediaConfig
 import app.xani.core.net.PersonData
 import app.xani.feature.home.FeedRepo
+import app.xani.feature.profile.ProfileIco
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
 import app.xani.ui.components.pressable
@@ -73,7 +74,7 @@ fun PersonAvatar(
                 .background(Brush.linearGradient(listOf(Color(a), Color(b)))),
             contentAlignment = Alignment.Center,
         ) {
-            val url = if (avatarUrl.startsWith("http")) avatarUrl else MediaConfig.url(avatarUrl.ifEmpty { null })
+            val url = MediaConfig.avatarUrl(avatarUrl)
             if (url.isNotEmpty()) {
                 RemoteImage(url = url, modifier = Modifier.size(size), maxEdge = 160, fallback = Color.Transparent)
             } else {
@@ -88,11 +89,12 @@ fun PersonAvatar(
  * One person as every list shows them, with the follow button bound to
  * [FollowStore] — so a tap here flips the same button on the feed card.
  *
- * [showMeta] is what separates the two places this row appears. In search, how
- * many followers a stranger has is the signal that tells you whether you found
- * the right account. In a follower or following list you already know who they
- * are, and their follower count is their business, not a number to rank your
- * own people by — so those lists show the picture, the handle, and the button.
+ * [showMeta] is what separates the two places this row appears. In search the
+ * follower count is the signal that tells you whether you found the right
+ * account. In a follower or following list the row is about recognising a
+ * person and sizing them up as a gifter: full name on top, the handle under
+ * it, and their lifetime gifting totals — sent and received, in coins — with
+ * the follower count alongside.
  */
 @Composable
 fun PersonRow(
@@ -126,7 +128,7 @@ fun PersonRow(
                     Spacer(Modifier.width(rdp(5)))
                 }
                 XaniText(
-                    if (showMeta) display else person.username.ifBlank { display },
+                    display,
                     Type.LabelBold,
                     color = ink,
                     fontSizeOverride = 14f,
@@ -147,10 +149,36 @@ fun PersonRow(
                     if (person.followsYou) append(" · ").append(copy.t(Copy.HomeFollowsYou))
                 }
                 XaniText(meta, Type.Micro, color = sub, fontSizeOverride = 11f, modifier = Modifier.padding(top = rdp(2)))
-            } else if (person.fullName.isNotBlank() && person.fullName != person.username) {
-                // The real name under the handle: still no counts, just enough to
-                // recognise somebody whose handle is not their name.
-                XaniText(person.fullName, Type.Micro, color = sub, fontSizeOverride = 11f, modifier = Modifier.padding(top = rdp(2)))
+            } else {
+                if (person.username.isNotBlank()) {
+                    XaniText("@" + person.username, Type.Micro, color = sub, fontSizeOverride = 11f, modifier = Modifier.padding(top = rdp(2)))
+                }
+                // Gifting totals in coins, both directions — ↑ sent, ↓ received —
+                // plus the follower count. One line, ellipsised, never two heights.
+                Row(
+                    Modifier.padding(top = rdp(3)),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    XaniText("↑", Type.Micro, color = Color(0xFFF59E0B), fontSizeOverride = 10f)
+                    Spacer(Modifier.width(rdp(2)))
+                    ProfileIco.Coin(Color(0xFFF59E0B), rdp(11))
+                    Spacer(Modifier.width(rdp(3)))
+                    XaniText(FeedRepo.compact(person.sentCoins), Type.Micro, color = sub, fontSizeOverride = 10f)
+                    Spacer(Modifier.width(rdp(10)))
+                    XaniText("↓", Type.Micro, color = Color(0xFF7C3AED), fontSizeOverride = 10f)
+                    Spacer(Modifier.width(rdp(2)))
+                    ProfileIco.Coin(Color(0xFF7C3AED), rdp(11))
+                    Spacer(Modifier.width(rdp(3)))
+                    XaniText(FeedRepo.compact(person.receivedCoins), Type.Micro, color = sub, fontSizeOverride = 10f)
+                    Spacer(Modifier.width(rdp(10)))
+                    XaniText(
+                        copy.t(Copy.HomeSearchFollowers, "n" to FeedRepo.compact(followers.toLong())),
+                        Type.Micro,
+                        color = sub,
+                        fontSizeOverride = 10f,
+                        maxLines = 1,
+                    )
+                }
             }
         }
         Spacer(Modifier.width(rdp(10)))

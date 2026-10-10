@@ -66,11 +66,28 @@ interface RtcRoom {
         fun onParticipants(userIds: List<Long>)
 
         fun onRemoteVideo(userId: Long, present: Boolean)
+
+        /**
+         * Our own camera track was published or replaced. The host's renderer
+         * only exists once that track does, and for a broadcast with no remote
+         * publishers nothing else fires afterwards — without this the host
+         * watches a black screen while their viewers see them fine.
+         */
+        fun onLocalVideo() = Unit
     }
 
     fun setMuted(muted: Boolean)
     fun setVideoEnabled(enabled: Boolean)
     fun switchCamera()
+
+    /**
+     * Locally silence everything this room plays out loud (remote audio). The
+     * mic and the connection are untouched, so a viewer who backgrounds the app
+     * keeps their seat and resumes instantly. Default no-op: the stub engine
+     * has no audio to silence.
+     */
+    fun setPlaybackMuted(muted: Boolean) {}
+
     fun localView(context: Context): View?
     fun remoteView(context: Context, userId: Long): View?
     fun close()
@@ -82,8 +99,21 @@ interface RtcEngine {
     /**
      * Join an SFU room with a server-minted token. `publish` false is a viewer
      * seat: no capture, no mic permission needed.
+     *
+     * `secondary` is a second room on a device that already has one — the PK
+     * watch seat. It leaves device audio routing alone: the primary room chose
+     * the mode (call audio with echo cancellation for a publisher), and a
+     * second room resetting that to media playback would take the host's AEC
+     * away mid-broadcast.
      */
-    fun joinRoom(url: String, token: String, video: Boolean, publish: Boolean, listener: RtcRoom.Listener): RtcRoom
+    fun joinRoom(
+        url: String,
+        token: String,
+        video: Boolean,
+        publish: Boolean,
+        listener: RtcRoom.Listener,
+        secondary: Boolean = false,
+    ): RtcRoom
 
     fun release()
 }

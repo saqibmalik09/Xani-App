@@ -2,26 +2,32 @@ package app.xani.feature.call
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,14 +41,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import app.xani.core.isolate.runFeature
 import app.xani.core.net.PersonData
 import app.xani.core.net.StageData
@@ -50,6 +53,8 @@ import app.xani.core.net.StageMemberData
 import app.xani.core.net.StageRequestData
 import app.xani.core.net.Xani
 import app.xani.feature.create.CreateIco
+import app.xani.feature.gift.CardTabs
+import app.xani.feature.gift.GiftingPanel
 import app.xani.feature.gift.formatCoins
 import app.xani.feature.profile.ProfileStore
 import app.xani.feature.social.FollowStore
@@ -69,13 +74,9 @@ import app.xani.ui.vector.stroke
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
- * The stage, drawn: co-host tiles in a video room, the seat circle in an
+ * The stage, drawn: co-host tiles in a video room, the seat grid in an
  * audio room, and the sheets around them. Everything here takes the
  * immutable [StageData] snapshot and nothing else that moves, so a frame
  * that changes one seat recomposes that seat — the chat, the picture and
@@ -94,10 +95,11 @@ private const val RailTiles = 4
 
 /**
  * The co-hosts: up to [RailTiles] pictures numbered 1..4 in seat order, then
- * one "…" chip for the rest. The host's screen stacks them down the right
- * edge ([horizontal] false); a viewer's screen lays them left → right under
- * the host's name ([horizontal] true), where nothing else sits, so tiles
- * never land on the chrome. Tapping a tile opens that person; the chip
+ * one "…" chip for the rest. Both screens keep them on the far side from the
+ * comments and directly above them: the host's screen stacks them down the
+ * right edge ([horizontal] false), a viewer's lays them left → right on the
+ * right ([horizontal] true). Nothing else sits there, so the tiles never land
+ * on the chat or the action chrome. Tapping a tile opens that person; the chip
  * opens the full list.
  */
 @Composable
@@ -133,24 +135,42 @@ internal fun CoHostRail(
         }
     }
     if (horizontal) {
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(rdp(6)), verticalAlignment = Alignment.CenterVertically) { tiles() }
+        // Four 72dp tiles plus the "…" chip is wider than a 360dp phone, and a
+        // right-aligned Row that overruns its parent puts tile 1 off the left
+        // edge. Scrolling keeps the row inside the screen with every tile
+        // reachable; it still wraps its content, so a short rail stays right.
+        Row(
+            modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(rdp(6)),
+            verticalAlignment = Alignment.CenterVertically,
+        ) { tiles() }
     } else {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(rdp(6)), horizontalAlignment = Alignment.End) { tiles() }
     }
 }
 
 /**
- * One co-host: their camera when the track is here, their avatar until
- * then; the seat number top-left, the mic state bottom-left, 💎 bottom-right.
+ * One co-host: their camera when they have turned it on, their profile
+ * picture otherwise — so the frame shows the person, never a black box; the
+ * seat number top-left, the mic state bottom-left, 💎 bottom-right.
+ *
+ * Whose camera is on comes from that person's own seat state, not from the
+ * host's room rule. The rule only decides whether they have the button: read
+ * off the rule instead, every co-host's tile would open a camera the moment
+ * the host allowed them, which is someone else's room on screen.
  */
 @Composable
 private fun CoHostTile(m: StageMemberData, index: Int, mediaRev: Int, onClick: () -> Unit) {
     val ctx = LocalContext.current
     val me = m.user.id == ProfileStore.currentUserId
-    // Re-ask for the renderer whenever the media session or the track set
-    // moved; the renderer itself is reused for the same person.
-    val view = remember(m.user.id, mediaRev, me) {
-        if (me) LiveSession.localView(ctx) else LiveSession.remoteView(ctx, m.user.id)
+    // My own tile follows my local toggle, which is a tap ahead of the
+    // snapshot; everyone else's follows what the room says they publish.
+    val session by LiveSession.state.collectAsState()
+    val camOff = if (me) session?.cameraOff != false else !m.cam
+    // Re-ask for the renderer whenever the media session, the track set or
+    // the camera state moved; the renderer itself is reused for the same person.
+    val view = remember(m.user.id, mediaRev, me, camOff) {
+        if (camOff) null else if (me) LiveSession.localView(ctx) else LiveSession.remoteView(ctx, m.user.id)
     }
     Box(
         Modifier
@@ -162,7 +182,7 @@ private fun CoHostTile(m: StageMemberData, index: Int, mediaRev: Int, onClick: (
             .pressable(pressedScale = 0.96f, onClick = onClick),
     ) {
         if (view != null) {
-            key(view) { AndroidView(factory = { view }, modifier = Modifier.fillMaxSize()) }
+            VideoSurface(view, Modifier.fillMaxSize())
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 PersonAvatar(m.user.id, m.user.fullName, m.user.avatarUrl, rdp(40), frameUrl = m.user.frameUrl, frameMime = m.user.frameMime)
@@ -371,11 +391,18 @@ internal fun StagePersonSheet(
             FrameStore.learnBadge(it.id, it.badgeUrl, it.badgeMime)
         }
     }
+    var tab by remember { mutableIntStateOf(0) }
+    val roomId = LiveSession.state.collectAsState().value?.roomId ?: 0L
     LiveSheet(onClose = onClose) { close ->
         val name = person?.fullName?.takeIf { it.isNotBlank() } ?: p.fullName.ifBlank { p.username }
         val handle = (person?.username ?: p.username).takeIf { it.isNotBlank() }?.let { "@$it" } ?: ""
+        CardTabs(tab, copy, onSelect = { tab = it }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = rdp(10)))
+        if (tab == 1) {
+            GiftingPanel(userId = p.id, copy = copy, roomId = roomId, modifier = Modifier.padding(top = rdp(10), bottom = rdp(12)))
+            return@LiveSheet
+        }
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = rdp(20)).padding(bottom = rdp(18)),
+            Modifier.fillMaxWidth().padding(horizontal = rdp(20)).padding(top = rdp(12), bottom = rdp(18)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(Modifier.border(rdp(2), Brush.linearGradient(listOf(Color(0xFFA78BFA), Color(0xFFF472B6))), CircleShape).padding(rdp(3))) {
@@ -472,10 +499,10 @@ internal fun SeatsSheet(
             Row(Modifier.padding(top = rdp(18)), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(rdp(18))) {
                 StepButton("−", enabled = stage.seats > maxOf(2, occupied + 1)) { onSeats(stage.seats - 1) }
                 XaniText(copy.t(Copy.LiveSeatsCount, "n" to "${stage.seats}"), Type.LabelBold, color = Color.White, fontSizeOverride = 22f)
-                StepButton("+", enabled = stage.seats < 35) { onSeats(stage.seats + 1) }
+                StepButton("+", enabled = stage.seats < StageData.AudioSeatMax) { onSeats(stage.seats + 1) }
             }
             Row(Modifier.padding(top = rdp(16)), horizontalArrangement = Arrangement.spacedBy(rdp(8))) {
-                listOf(4, 8, 12, 16, 24, 35).forEach { n ->
+                listOf(6, 12, 18, 24, 36, 45).forEach { n ->
                     val on = n == stage.seats
                     Box(
                         Modifier
@@ -503,15 +530,13 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     ) { XaniText(glyph, Type.LabelBold, color = Color.White.copy(alpha = if (enabled) 1f else 0.3f), fontSizeOverride = 20f) }
 }
 
-// ─── audio: the seat circle ──────────────────────────────────────────────────
+// ─── audio: the seat grid ────────────────────────────────────────────────────
 
 /**
- * Seats around the host: seat 0 in the middle, the rest on one to three
- * rings, seat 1 at the left going clockwise. Empty seats are dashed boxes a
- * viewer taps to sit; a taken seat is that person's box (picture in the
- * middle, 💎 top-right, name under, mic bottom-left). Laid out with a custom
- * Layout: every box is measured once at a fixed size and placed by angle,
- * so 35 seats cost 35 placements and no nested rows.
+ * Host is seat 0 at the top-left. Guests follow in order, left → right,
+ * then the next row — 6 across when the cell stays ≥ 52 dp, otherwise 5.
+ * Empty seats are dashed boxes a viewer taps to sit. The grid scrolls
+ * inside the leftover height so 45 seats never shove chat off screen.
  */
 @Composable
 internal fun AudioStage(
@@ -521,83 +546,55 @@ internal fun AudioStage(
     light: Boolean = false,
     onSeat: (seat: Int, member: StageMemberData?) -> Unit,
 ) {
-    val total = stage.seats.coerceIn(1, 35)
-    val guestsN = total - 1
+    val total = stage.seats.coerceIn(1, StageData.AudioSeatMax)
     val bySeat = remember(stage.members) { stage.members.associateBy { it.seat } }
-    val rings = ringPlan(guestsN)
-    // Box size follows the crowd: eight around the host draw large, thirty-five draw small.
-    val boxDp = when {
-        guestsN <= 8 -> 68
-        guestsN <= 20 -> 56
-        else -> 46
-    }
-    val box = rdp(boxDp)
-    val boxH = rdp((boxDp * 1.32f).roundToInt())
-    val hostBox = rdp((boxDp * 1.12f).roundToInt())
-
-    Layout(
-        modifier = modifier,
-        content = {
-            // Child 0: the host. Children 1..guestsN: seats in order.
-            SeatBox(bySeat[0], seat = 0, size = hostBox, copy = copy, light = light, onTap = { onSeat(0, bySeat[0]) })
-            for (i in 1..guestsN) {
-                key(i) {
-                    SeatBox(bySeat[i], seat = i, size = box, copy = copy, light = light, onTap = { onSeat(i, bySeat[i]) })
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val gap = rdp(8)
+        val cols = audioColumns(maxWidth, gap)
+        val cellW = (maxWidth - gap * (cols - 1)) / cols
+        val cellH = cellW * 1.28f
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxHeight)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(gap),
+        ) {
+            val rows = (total + cols - 1) / cols
+            for (row in 0 until rows) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                ) {
+                    for (col in 0 until cols) {
+                        val seat = row * cols + col
+                        if (seat < total) {
+                            key(seat) {
+                                Box(Modifier.weight(1f).height(cellH)) {
+                                    SeatBox(
+                                        bySeat[seat],
+                                        seat = seat,
+                                        size = cellW,
+                                        copy = copy,
+                                        light = light,
+                                        onTap = { onSeat(seat, bySeat[seat]) },
+                                    )
+                                }
+                            }
+                        } else {
+                            Spacer(Modifier.weight(1f).height(cellH))
+                        }
+                    }
                 }
             }
-        },
-    ) { measurables, constraints ->
-        val w = constraints.maxWidth
-        val boxPx = box.roundToPx()
-        val boxHPx = boxH.roundToPx()
-        val hostPx = hostBox.roundToPx()
-        val hostHPx = (hostPx * 1.32f).roundToInt()
-        // Ring radii: the first clears the host; each next ring one box further
-        // out; everything scaled down so the outer ring stays inside the width.
-        val nominal = FloatArray(rings.size) { k -> hostPx * 0.75f + boxHPx * 0.85f + k * boxHPx * 1.02f }
-        val maxR = (w / 2f - boxPx / 2f - 4.dp.roundToPx())
-        val scale = if (rings.isEmpty()) 1f else minOf(1f, maxR / nominal.last())
-        val radii = FloatArray(rings.size) { nominal[it] * scale }
-        val outer = if (rings.isEmpty()) hostHPx / 2f else radii.last() + boxHPx / 2f
-        val h = (outer * 2 + 8.dp.roundToPx()).roundToInt().coerceAtMost(constraints.maxHeight)
-        val cx = w / 2f
-        val cy = h / 2f
-
-        val hostP = measurables[0].measure(Constraints.fixed(hostPx, hostHPx))
-        val placed = ArrayList<Pair<androidx.compose.ui.layout.Placeable, Pair<Int, Int>>>(measurables.size)
-        placed += hostP to Pair((cx - hostPx / 2f).roundToInt(), (cy - hostHPx / 2f).roundToInt())
-        var idx = 1
-        rings.forEachIndexed { k, count ->
-            val r = radii[k]
-            for (j in 0 until count) {
-                if (idx >= measurables.size) break
-                // Seat 1 sits at the left; the ring reads left → top → right → bottom.
-                val a = PI + (2 * PI * j / count)
-                val x = cx + r * cos(a).toFloat() - boxPx / 2f
-                val y = cy + r * sin(a).toFloat() - boxHPx / 2f
-                placed += measurables[idx].measure(Constraints.fixed(boxPx, boxHPx)) to Pair(x.roundToInt(), y.roundToInt())
-                idx++
-            }
-        }
-        layout(w, h) {
-            for ((p, at) in placed) p.placeRelative(at.first, at.second)
         }
     }
 }
 
-/** Seats per ring: 8, then 12, then the rest. */
-private fun ringPlan(n: Int): List<Int> {
-    if (n <= 0) return emptyList()
-    val out = ArrayList<Int>(3)
-    var left = n
-    for (cap in intArrayOf(8, 12, 15)) {
-        if (left <= 0) break
-        val take = minOf(cap, left)
-        out += take
-        left -= take
-    }
-    if (left > 0) out[out.lastIndex] += left
-    return out
+/** 6 per row when each cell stays usable; 5 on a narrow phone. */
+private fun audioColumns(maxWidth: Dp, gap: Dp): Int {
+    if (maxWidth < 80.dp) return 5
+    return if ((maxWidth - gap * 5) / 6 >= 52.dp) 6 else 5
 }
 
 /**
@@ -639,7 +636,12 @@ private fun SeatBox(
                     contentAlignment = Alignment.Center,
                 ) { XaniText("+", Type.LabelBold, color = sub, fontSizeOverride = 18f) }
                 Spacer(Modifier.height(rdp(4)))
-                XaniText("$seat", Type.Micro, color = sub, fontSizeOverride = 9f)
+                XaniText(
+                    if (seat == 0) copy.t(Copy.LivePeopleHost) else "$seat",
+                    Type.Micro,
+                    color = sub,
+                    fontSizeOverride = 9f,
+                )
             }
         }
         return
@@ -698,14 +700,39 @@ private fun SeatBox(
 @Composable
 internal fun RaiseHandMark(tint: Color, size: Dp) = VectorCanvas(
     shapes = listOf(
-        // head + shoulders
-        VShape.D("M9.5 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7z", stroke(tint, 1.7f)),
-        VShape.D("M2.5 20a7 7 0 0114 0", stroke(tint, 1.7f)),
-        // plus badge, top right
-        VShape.Line(18.5f, 5.5f, 18.5f, 11.5f, stroke(tint, 1.8f)),
-        VShape.Line(15.5f, 8.5f, 21.5f, 8.5f, stroke(tint, 1.8f)),
+        // A video camera with a plus on its body: "ask to join on camera",
+        // which is what the request is — not "add a friend".
+        VShape.Box(2.5f, 6.5f, 13.5f, 11f, 2.6f, stroke(tint, 1.7f)),
+        VShape.D("M16 10.5l5-3v9l-5-3z", stroke(tint, 1.7f)),
+        VShape.Line(9.25f, 9.25f, 9.25f, 14.75f, stroke(tint, 1.8f)),
+        VShape.Line(6.5f, 12f, 12f, 12f, stroke(tint, 1.8f)),
     ),
     viewport = 24f,
+    modifier = Modifier.size(size),
+)
+
+/** Shield with a tick: the room's moderators. */
+@Composable
+internal fun ModeratorMark(tint: Color, size: Dp) = VectorCanvas(
+    shapes = listOf(
+        VShape.D("M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z", stroke(tint, 1.8f)),
+        VShape.D("M9 12l2 2 4-4", stroke(tint, 1.8f)),
+    ),
+    viewport = 24f,
+    modifier = Modifier.size(size),
+)
+
+/** Gift box: what a sender taps to give. The diamond is the receiver's counter. */
+@Composable
+internal fun GiftBoxMark(tint: Color = Color.White, size: Dp = rdp(20)) = VectorCanvas(
+    shapes = listOf(
+        VShape.D("M2.5 5.5h11V8h-11z", stroke(tint, 1.5f)),
+        VShape.D("M3.5 8v5.5h9V8", stroke(tint, 1.5f)),
+        VShape.Line(8f, 5.5f, 8f, 13.5f, stroke(tint, 1.5f)),
+        VShape.D("M8 5.5C8 3.8 6.7 2.4 5.6 3 4.5 3.6 6 5.5 8 5.5z", stroke(tint, 1.5f)),
+        VShape.D("M8 5.5c0-1.7 1.3-3.1 2.4-2.5 1.1.6-.4 2.5-2.4 2.5z", stroke(tint, 1.5f)),
+    ),
+    viewport = 16f,
     modifier = Modifier.size(size),
 )
 

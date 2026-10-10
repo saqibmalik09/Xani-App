@@ -135,6 +135,9 @@ internal fun LiveRoomData.toTile(): LiveTile {
         hostId = hostId,
         avatarUrl = host.avatarUrl,
         viewerCount = viewers,
+        // Credited diamonds, not the coin spend: the pill a viewer sees before
+        // the session's first frame must already be the split's number.
+        diamonds = compactCount(giftDiamonds),
         locked = locked,
         friendsOnly = audience == "friends",
         coverUrl = coverUrl,

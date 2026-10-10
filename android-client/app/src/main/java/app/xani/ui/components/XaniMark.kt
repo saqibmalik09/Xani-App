@@ -18,7 +18,13 @@ import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
+import app.xani.core.media.RemoteImage
+import app.xani.ui.brand.LocalBrand
 import app.xani.ui.theme.Dark
 import app.xani.ui.theme.Type
 import app.xani.ui.theme.WordmarkGradient
@@ -31,6 +37,21 @@ import app.xani.ui.theme.rdp
  */
 @Composable
 fun XaniMark(size: Dp, modifier: Modifier = Modifier) {
+    val logo = LocalBrand.current.logoUrl
+    if (logo.isNotEmpty()) {
+        // The dashboard logo (Settings → Branding) replaces the drawn mark
+        // everywhere it appears. Prefetched on config load, so this is a
+        // memory/disk hit; the drawn mark never shows under a transparent logo.
+        val edge = with(LocalDensity.current) { size.roundToPx() }.coerceIn(48, 512)
+        RemoteImage(
+            url = logo,
+            modifier = modifier.size(size).clip(RoundedCornerShape(size * 0.22f)),
+            contentScale = ContentScale.Fit,
+            maxEdge = edge,
+            fallback = Color.Transparent,
+        )
+        return
+    }
     val px = with(LocalDensity.current) { size.toPx() }
     val shape = remember(px) { crossPath(px) }
     val face = remember(px) {

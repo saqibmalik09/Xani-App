@@ -80,6 +80,9 @@ export function Card({ title, children, actions }: { title?: string; children: R
         borderRadius: 'var(--radius)',
         boxShadow: 'var(--shadow)',
         padding: 22,
+        minWidth: 0,
+        maxWidth: '100%',
+        overflow: 'hidden',
       }}
     >
       {(title || actions) && (

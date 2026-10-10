@@ -10,6 +10,7 @@ import app.xani.feature.call.PushRegistrar
 import app.xani.feature.home.FeedRepo
 import app.xani.feature.profile.AvatarStore
 import app.xani.feature.profile.ProfileStore
+import app.xani.feature.profile.StoreShelfStore
 import app.xani.feature.upload.UploadManager
 
 /**
@@ -21,10 +22,12 @@ import app.xani.feature.upload.UploadManager
  * the endpoint, the request, session adoption, account linking — is complete and
  * exercised by [AuthApi.signInWithGoogle]; only this one step is pluggable.
  *
- * To turn Google sign-in on, set `GOOGLE_WEB_CLIENT_ID` (env / gradle property /
- * brand.env). [MainActivity] installs [CredentialGoogleSignIn]; when the id is
- * empty the provider reports unavailable and the button soft-fails. Pass the
- * same web client id to the identity service as `GOOGLE_CLIENT_IDS`.
+ * To turn Google sign-in on, paste the OAuth web client id into Settings →
+ * Branding on the dashboard: it is served on `/v1/config`, so one deployment can
+ * move to another Google project without an app release. `GOOGLE_WEB_CLIENT_ID`
+ * (env / gradle property) is the build-time fallback. [MainActivity] installs
+ * [CredentialGoogleSignIn]; while the id is empty the provider reports
+ * unavailable and the button soft-fails.
  */
 sealed class GoogleTokenResult {
     data class Ok(val idToken: String) : GoogleTokenResult()
@@ -104,6 +107,15 @@ object Xani {
     /** Typed live gift catalog, send and ledger endpoints. */
     val gifts: GiftApi get() = GiftApi(api)
 
+    /** Gifting engine: the rule-aware catalog tree and received / sent statements. */
+    val gifting: GiftingApi get() = GiftingApi(api)
+
+    /** The caller's verified live-time record: today / week / month, days, sessions. */
+    val liveTime: LiveTimeApi get() = LiveTimeApi(api)
+
+    /** Live-time rewards: summary, history, eligibility before going live, claims. */
+    val rewards: RewardsApi get() = RewardsApi(api)
+
     /** Public promotional banners by placement. */
     val banners: BannerApi get() = BannerApi(api)
 
@@ -122,6 +134,15 @@ object Xani {
     /** Typed wallet statement + diamond withdrawal endpoints. */
     val wallet: WalletApi get() = WalletApi(api)
 
+    /** Typed coin-seller endpoints: the seller hub and the user-side list. */
+    val sellers: SellerApi get() = SellerApi(api)
+
+    /** In-app moderation: capture grants, mic, warnings, block/unblock. */
+    val mod: ModApi get() = ModApi(api)
+
+    /** Find friends: opt-in contact matching (hashes only, never raw contacts). */
+    val contacts: ContactsApi get() = ContactsApi(api)
+
     fun init(context: Context, googleProvider: GoogleIdTokenProvider = NoGoogleSignIn) {
         if (initialized) return
         synchronized(this) {
@@ -132,10 +153,11 @@ object Xani {
             CrashLog.install(app)
             deviceKey = DeviceIdentity.key(app)
             google = googleProvider
-            api = ApiClient(baseUrl = baseUrl(), userAgent = userAgent())
+            api = ApiClient(baseUrl = baseUrl(), userAgent = userAgent(), appVersion = AppGate.version)
             session = SessionManager(app, api)
             api.tokens = session
             ProfileStore.attach(app)
+            StoreShelfStore.attach(app)
             AvatarStore.attach(app)
             MediaConfig.attach(app)
             AssetCache.attach(app)
@@ -144,6 +166,7 @@ object Xani {
             CallController.attach(app)
             LiveSession.attach(app)
             PushRegistrar.attach(app)
+            ContactSync.attach(app)
             initialized = true
         }
         session.restore()
@@ -156,5 +179,5 @@ object Xani {
     private fun baseUrl(): String = BuildConfig.API_BASE_URL.trim().trimEnd('/')
 
     private fun userAgent(): String =
-        "${BuildConfig.APP_NAME}/${BuildConfig.VERSION_NAME} (Android; ${DeviceIdentity.model})"
+        "${BuildConfig.APP_NAME}/${AppGate.version} (Android; ${DeviceIdentity.model})"
 }

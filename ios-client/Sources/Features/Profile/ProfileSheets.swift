@@ -9,6 +9,7 @@ struct ProfileDrawer: View {
     var onReport: () -> Void = {}
     var onTerms: () -> Void = {}
     var onRoles: () -> Void = {}
+    var onRewards: () -> Void = {}
     var onLogout: () -> Void = {}
     @Environment(\.uiScale) private var scale
     @Environment(\.brand) private var brand
@@ -74,6 +75,9 @@ struct ProfileDrawer: View {
                         }
                         drawerRow(Copy.t(.rolesTitle), accent: true, action: onRoles) {
                             VectorCanvas([.data("M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z", .stroke(ProfileTokens.accent, 1.7))], viewport: 24, side: 18 * scale)
+                        }
+                        drawerRow(Copy.t(.rewardsTitle), sub: Copy.t(.rewardsLiveTime), accent: true, action: onRewards) {
+                            VectorCanvas([.data("M12 15l-3.5 2 .8-4L6.5 10l4-.5L12 6l1.5 3.5 4 .5-2.8 3 .8 4z", .stroke(Color(rgb: 0xD97706), 1.7))], viewport: 24, side: 18 * scale)
                         }
 
                         divider
@@ -719,7 +723,6 @@ struct ProfileStatsView: View {
     var onBack: () -> Void
     @Environment(\.uiScale) private var scale
     @Environment(\.systemSafeInsets) private var insets
-    @State private var period = ReceivingPeriod.daily
 
     var body: some View {
         VStack(spacing: 0) {
@@ -740,22 +743,9 @@ struct ProfileStatsView: View {
             Rectangle().fill(ProfileTokens.border).frame(height: 1)
 
             if kind == .receiving {
-                HStack(spacing: 8 * scale) {
-                    periodChip(Copy.t(.profileDaily), .daily)
-                    periodChip(Copy.t(.profileWeekly), .weekly)
-                    periodChip(Copy.t(.profileMonthly), .monthly)
-                }
-                .padding(.horizontal, 20 * scale)
-                .padding(.vertical, 14 * scale)
-                Rectangle().fill(ProfileTokens.border).frame(height: 1)
-            }
-
-            ScrollView {
-                if kind == .receiving {
-                    receivingBody
-                } else {
-                    peopleBody
-                }
+                receivingBody
+            } else {
+                ScrollView { peopleBody }
             }
         }
         .background(ProfileTokens.bg.ignoresSafeArea())
@@ -769,61 +759,18 @@ struct ProfileStatsView: View {
         }
     }
 
-    private var summary: ProfileReceivingSummary {
-        switch period {
-        case .daily: return store.snapshot.receivingDaily
-        case .weekly: return store.snapshot.receivingWeekly
-        case .monthly: return store.snapshot.receivingMonthly
-        }
-    }
-
+    /// The owner's own statement from the gifting engine: received and sent,
+    /// this live / today / week / month / dates, top counterparts or latest,
+    /// moving as frames land. The list takes the rest of the screen.
     private var receivingBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                summaryCell("💎", summary.diamonds, Copy.t(.profileDiamonds))
-                summaryCell("🪙", summary.coins, Copy.t(.profileCoins))
-                summaryCell("🎁", summary.gifts, Copy.t(.profileGifts))
-            }
-            .padding(16 * scale)
-            .background(
-                LinearGradient(colors: [Color(rgb: 0x6D28D9, opacity: 0.08), Color(rgb: 0xDB2777, opacity: 0.06)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        GeometryReader { geo in
+            GiftingPanel(
+                userId: Xani.currentUserId,
+                dark: false,
+                listHeight: max(200, (geo.size.height - 150 * scale) / scale)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16 * scale, style: .continuous)
-                    .stroke(Color(rgb: 0x6D28D9, opacity: 0.15), lineWidth: 1 * scale)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16 * scale, style: .continuous))
-            .padding(20 * scale)
-
-            AppText(Copy.t(.profileTopSenders), style: Type.labelBold, color: ProfileTokens.sub, sizeOverride: 13)
-                .padding(.horizontal, 20 * scale)
-                .padding(.bottom, 10 * scale)
-
-            ForEach(Array(store.snapshot.people.prefix(5).enumerated()), id: \.element.id) { i, person in
-                HStack(spacing: 12 * scale) {
-                    Text("#\(i + 1)")
-                        .font(.system(size: 11 * scale, weight: .heavy))
-                        .foregroundColor(.white)
-                        .frame(width: 34 * scale, height: 34 * scale)
-                        .background(ProfileTokens.cta)
-                        .clipShape(Circle())
-                    avatar(person, 40 * scale)
-                    VStack(alignment: .leading, spacing: 2 * scale) {
-                        AppText(person.name, style: Type.labelBold, color: ProfileTokens.text, sizeOverride: 14)
-                        AppText(person.handle, style: Type.micro, color: ProfileTokens.sub, sizeOverride: 11)
-                    }
-                    Spacer()
-                    HStack(spacing: 4 * scale) {
-                        Text("💎").font(.system(size: 13 * scale))
-                        AppText(diamond(for: person), style: Type.labelBold, color: ProfileTokens.accentDeep, sizeOverride: 14)
-                    }
-                }
-                .padding(.horizontal, 20 * scale)
-                .padding(.vertical, 12 * scale)
-                if i < 4 { Rectangle().fill(ProfileTokens.border).frame(height: 1).padding(.horizontal, 20 * scale) }
-            }
+            .padding(.top, 10 * scale)
         }
-        .padding(.bottom, 24 * scale)
     }
 
     /// The real follow graph, keyset paged from the server. The follow button on
@@ -834,55 +781,4 @@ struct ProfileStatsView: View {
             .padding(.bottom, 24 * scale)
     }
 
-    private func periodChip(_ title: String, _ value: ReceivingPeriod) -> some View {
-        Button(action: { period = value }) {
-            AppText(title, style: Type.labelBold, color: period == value ? ProfileTokens.accentDeep : ProfileTokens.sub, sizeOverride: 12)
-                .frame(maxWidth: .infinity)
-                .frame(height: 32 * scale)
-                .background(period == value ? Color(rgb: 0x6D28D9, opacity: 0.1) : ProfileTokens.bg2)
-                .overlay(Capsule().stroke(period == value ? ProfileTokens.accentDeep : ProfileTokens.border, lineWidth: 1 * scale))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func summaryCell(_ icon: String, _ value: String, _ label: String) -> some View {
-        VStack(spacing: 2 * scale) {
-            Text(icon).font(.system(size: 20 * scale))
-            AppText(value, style: Type.labelBold, color: ProfileTokens.accentDeep, sizeOverride: 16)
-            AppText(label, style: Type.micro, color: ProfileTokens.sub, sizeOverride: 10)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func avatar(_ person: ProfilePerson, _ size: CGFloat) -> some View {
-        Text(person.initials)
-            .font(.system(size: 12 * scale, weight: .heavy))
-            .foregroundColor(.white)
-            .frame(width: size, height: size)
-            .background(LinearGradient(colors: [Color(rgb: person.tintA), Color(rgb: person.tintB)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .clipShape(Circle())
-    }
-
-    private func diamond(for person: ProfilePerson) -> String {
-        switch period {
-        case .daily: return person.diamonds
-        case .weekly:
-            switch person.diamonds {
-            case "124": return "840"
-            case "98": return "612"
-            case "62": return "388"
-            case "44": return "210"
-            default: return "78"
-            }
-        case .monthly:
-            switch person.diamonds {
-            case "124": return "3.2K"
-            case "98": return "2.4K"
-            case "62": return "1.5K"
-            case "44": return "840"
-            default: return "312"
-            }
-        }
-    }
 }

@@ -96,22 +96,44 @@ fun LiveSheet(
     val state = remember { SheetMotion() }
     // Gesture lambdas below are built once; they read the live flag from here.
     state.hidden = hidden
-    // The finger's live displacement, in px, on top of [offset].
+    // The finger's travel since the drag began, in px, on top of [offset].
     var dragPx by remember { mutableFloatStateOf(0f) }
+    // The finger's RAW travel, unclamped: the rubber band above rest maps
+    // from this, so damping stays a pure function of position — the feel
+    // never depends on how many move events happened to arrive.
+    var rawPx by remember { mutableFloatStateOf(0f) }
 
     fun fraction(): Float {
         val h = state.heightPx
         return if (h <= 0f) offset.value else (offset.value + dragPx / h).coerceIn(0f, 1f)
     }
-    fun close() {
+    // Where the sheet is drawn: unlike [fraction] this may dip a little below
+    // zero, so the rubber band above rest is visible, not clipped.
+    fun displayFraction(): Float {
+        val h = state.heightPx
+        return if (h <= 0f) offset.value else (offset.value + dragPx / h).coerceIn(-0.08f, 1f)
+    }
+    fun closeWith(velocityPxPerSec: Float) {
         if (state.closing) return
         state.closing = true
         scope.launch {
-            offset.snapTo(fraction()); dragPx = 0f
-            offset.animateTo(1f, tween(170, easing = FastOutLinearInEasing))
+            offset.snapTo(displayFraction()); dragPx = 0f; rawPx = 0f
+            val h = state.heightPx
+            if (velocityPxPerSec > 0f && h > 0f) {
+                // A flung sheet leaves at the finger's speed; a slower exit
+                // here is what made a hard swipe-down feel like it caught.
+                offset.animateTo(
+                    1f,
+                    spring(dampingRatio = 1f, stiffness = 320f),
+                    initialVelocity = velocityPxPerSec / h,
+                )
+            } else {
+                offset.animateTo(1f, tween(170, easing = FastOutLinearInEasing))
+            }
             onClose()
         }
     }
+    fun close() = closeWith(0f)
     fun settle(velocityPxPerSec: Float) {
         state.dragging = false
         if (state.closing || state.hidden) return
@@ -121,10 +143,12 @@ fun LiveSheet(
         val flingDown = velocityPxPerSec > 800f
         val flingUp = velocityPxPerSec < -900f
         if (!flingUp && (at > 0.25f || (flingDown && at > 0.04f))) {
-            close()
+            closeWith(velocityPxPerSec)
         } else {
             scope.launch {
-                offset.snapTo(at); dragPx = 0f
+                // Snap to the drawn spot (the rubber band may be below rest)
+                // so the spring home starts where the finger left the sheet.
+                offset.snapTo(displayFraction()); dragPx = 0f; rawPx = 0f
                 offset.animateTo(
                     0f,
                     spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
@@ -137,9 +161,20 @@ fun LiveSheet(
         if (state.closing || state.hidden) return
         val h = state.heightPx
         if (h <= 0f) return
-        // Resist above the resting position so an upward pull feels anchored.
-        val raw = dragPx + dyPx
-        dragPx = if (offset.value * h + raw < 0f) raw * 0.25f else raw
+        // Pure finger travel below rest; above rest a short rubber band. The
+        // band is a position map from the raw overshoot, so a hold that drifts
+        // up still answers the finger — the dead clamp here is what made the
+        // sheet feel stuck — and the way back down is damped the same way,
+        // so no travel is ever silently banked.
+        val rest = -offset.value * h
+        rawPx += dyPx
+        dragPx = if (rawPx >= rest) {
+            rawPx
+        } else {
+            val over = rest - rawPx
+            val cap = h * 0.07f
+            rest - cap * over / (over + cap * 2f)
+        }
     }
 
     // Enter on mount; slide away and back as [hidden] flips. One animatable,
@@ -147,7 +182,7 @@ fun LiveSheet(
     LaunchedEffect(hidden) {
         if (state.closing) return@LaunchedEffect
         if (hidden) {
-            offset.snapTo(fraction()); dragPx = 0f
+            offset.snapTo(fraction()); dragPx = 0f; rawPx = 0f
             offset.animateTo(1f, tween(220, easing = FastOutLinearInEasing))
         } else {
             offset.animateTo(0f, spring(dampingRatio = 0.86f, stiffness = 340f))
@@ -240,18 +275,27 @@ fun LiveSheet(
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             tracker.resetTracking()
+            // Finger travel, accumulated. Raw positions on this node are relative
+            // to the sheet, which this gesture is moving, so feeding them to the
+            // tracker would measure the finger plus the sheet and read a lazy
+            // release as a fling.
+            var total = Offset.Zero
+            tracker.addPosition(down.uptimeMillis, total)
             var pointer = down.id
             val start = awaitVerticalTouchSlopOrCancellation(pointer) { change, over ->
                 change.consume()
                 state.dragging = true
-                tracker.addPosition(change.uptimeMillis, change.position)
+                total += change.positionChange()
+                tracker.addPosition(change.uptimeMillis, total)
                 dragBy(over)
             } ?: return@awaitEachGesture
             pointer = start.id
             val done = verticalDrag(pointer) { change ->
                 change.consume()
-                tracker.addPosition(change.uptimeMillis, change.position)
-                dragBy(change.positionChange().y)
+                val delta = change.positionChange()
+                total += delta
+                tracker.addPosition(change.uptimeMillis, total)
+                dragBy(delta.y)
             }
             settle(if (done) tracker.calculateVelocity().y else 0f)
         }
@@ -274,7 +318,7 @@ fun LiveSheet(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .onSizeChanged { state.heightPx = it.height.toFloat() }
-                .graphicsLayer { translationY = fraction() * size.height }
+                .graphicsLayer { translationY = displayFraction() * size.height }
                 .clip(shape)
                 .background(background)
                 .border(1.dp, Color(0x408B5CF6), shape)

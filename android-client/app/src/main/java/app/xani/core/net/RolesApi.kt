@@ -140,11 +140,56 @@ data class WithdrawBriefData(
     }
 }
 
+/** One recharge (coin purchase) as an upline may see it. */
+@Immutable
+data class RechargeBriefData(
+    val id: Long,
+    val packageTitle: String,
+    val currency: String,
+    val price: String,
+    val coins: Long,
+    val method: String,
+    val status: Int, // 0 pending, 1 approved, 2 rejected
+    val note: String,
+    val createdAt: String,
+    val decidedAt: String,
+) {
+    companion object {
+        fun from(json: JSONObject) = RechargeBriefData(
+            id = json.id("id"),
+            packageTitle = json.str("package"),
+            currency = json.str("currency"),
+            price = json.str("price"),
+            coins = json.long("coins"),
+            method = json.str("method"),
+            status = json.int("status"),
+            note = json.str("note"),
+            createdAt = json.str("created_at"),
+            decidedAt = json.str("decided_at"),
+        )
+    }
+}
+
+/** Approved recharge totals for one member. */
+@Immutable
+data class RechargeTotalsData(val count: Long, val coins: Long, val pendingCount: Long) {
+    companion object {
+        fun from(json: JSONObject?) = RechargeTotalsData(
+            count = json?.long("count") ?: 0L,
+            coins = json?.long("coins") ?: 0L,
+            pendingCount = json?.long("pending_count") ?: 0L,
+        )
+    }
+}
+
 /** Read-only money picture of one downline member. */
 @Immutable
 data class MemberFinanceData(
     val membership: MembershipData,
     val gifts: GiftTotalsData,
+    val recharge: RechargeTotalsData,
+    val recharges: List<RechargeBriefData>,
+    val rechargesNext: String,
     val withdrawals: List<WithdrawBriefData>,
     val next: String,
 ) {
@@ -152,6 +197,9 @@ data class MemberFinanceData(
         fun from(data: JSONObject) = MemberFinanceData(
             membership = MembershipData.from(data.obj("membership") ?: JSONObject()),
             gifts = GiftTotalsData.from(data.obj("gifts")),
+            recharge = RechargeTotalsData.from(data.obj("recharge")),
+            recharges = data.objects("recharges").map(RechargeBriefData::from),
+            rechargesNext = data.str("recharges_next_cursor"),
             withdrawals = data.objects("withdrawals").map(WithdrawBriefData::from),
             next = data.str("next_cursor"),
         )
@@ -225,6 +273,7 @@ object FormFieldType {
     const val DROPDOWN = "dropdown"
     const val COUNTRY = "country"
     const val PHONE = "phone"
+    const val WHATSAPP = "whatsapp"
 }
 
 /**
@@ -302,8 +351,14 @@ data class WorkspaceActionsData(
     val transfer: Boolean,
     val viewDownline: Boolean,
     val viewUpline: Boolean,
+    /** Role-policy self-service: detach from the upline (reason, upline informed). */
+    val leaveUpline: Boolean = false,
+    /** Role-policy self-service: ask to move under a new upline (they approve). */
+    val shiftUpline: Boolean = false,
+    /** Role-policy self-service: remove a direct downline (reason, member informed). */
+    val removeDownline: Boolean = false,
 ) {
-    val anyMemberAction: Boolean get() = suspend || block || revoke || transfer
+    val anyMemberAction: Boolean get() = suspend || block || revoke || transfer || removeDownline
 
     companion object {
         val None = WorkspaceActionsData(false, false, false, false, false, false, false, false)
@@ -316,6 +371,9 @@ data class WorkspaceActionsData(
             transfer = json.bool("transfer"),
             viewDownline = json.bool("view_downline"),
             viewUpline = json.bool("view_upline"),
+            leaveUpline = json.bool("leave_upline"),
+            shiftUpline = json.bool("shift_upline"),
+            removeDownline = json.bool("remove_downline"),
         )
     }
 }
@@ -449,14 +507,36 @@ data class RoleRequestPage(val items: List<RoleRequestData>, val next: String) {
 
 /** A code the caller can share, and which roles it onboards. */
 @Immutable
-data class ReferralCodeData(val code: String, val membershipId: Long, val role: RoleBrief, val targetRoles: List<RoleBrief>) {
+data class JoinLinkData(val role: RoleBrief, val url: String) {
+    companion object {
+        fun from(json: JSONObject) = JoinLinkData(
+            role = RoleBrief.from(json.obj("role")),
+            url = json.str("url"),
+        )
+    }
+}
+
+data class ReferralCodeData(
+    val code: String,
+    val membershipId: Long,
+    val role: RoleBrief,
+    val targetRoles: List<RoleBrief>,
+    val joinLinks: List<JoinLinkData> = emptyList(),
+) {
     companion object {
         fun from(json: JSONObject) = ReferralCodeData(
             code = json.str("code"),
             membershipId = json.id("membership_id"),
             role = RoleBrief.from(json.obj("role")),
             targetRoles = json.objects("target_roles").map { RoleBrief.from(it) },
+            joinLinks = json.objects("join_links").map(JoinLinkData::from),
         )
+    }
+
+    fun linkFor(role: RoleBrief): String {
+        joinLinks.firstOrNull { it.role.slug.equals(role.slug, ignoreCase = true) && it.url.isNotBlank() }
+            ?.url?.let { return it }
+        return MediaConfig.joinLink(code, role.slug)
     }
 }
 
@@ -551,6 +631,19 @@ class RolesApi internal constructor(private val api: ApiClient) {
             map = RoleRequestData::from,
         )
 
+    /** Leave my own upline (role kept, reason required, upline informed). Immediate. */
+    suspend fun leaveUpline(id: Long, reason: String): ApiResponse<MembershipData> =
+        api.post("/v1/memberships/$id/leave-upline", jsonOf("reason" to reason.trim()), authenticated = true, map = MembershipData::from)
+
+    /** Ask to move under a new upline by their referral code; they approve or reject. */
+    suspend fun shiftUpline(id: Long, code: String, note: String): ApiResponse<RoleRequestData> =
+        api.post(
+            "/v1/memberships/$id/shift-upline",
+            jsonOf("code" to code.trim(), "note" to note.trim()),
+            authenticated = true,
+            map = RoleRequestData::from,
+        )
+
     /** Active members of [roleSlug] the caller may see — candidates for a transfer destination. */
     suspend fun members(roleSlug: String, query: String, cursor: String): ApiResponse<MembershipPage> {
         val q = HashMap(page(cursor))
@@ -596,9 +689,15 @@ class RolesApi internal constructor(private val api: ApiClient) {
     suspend fun membership(id: Long): ApiResponse<MembershipData> =
         api.get("/v1/memberships/$id", authenticated = true, map = MembershipData::from)
 
-    /** Gift totals + withdrawal history for a downline seat the caller may view. */
-    suspend fun finance(id: Long, before: String = ""): ApiResponse<MemberFinanceData> {
-        val q = if (before.isEmpty()) emptyMap() else mapOf("before" to before)
+    /**
+     * Gift totals + recharge and withdrawal history for a downline seat the
+     * caller may view. [before] pages withdrawals, [rechargeBefore] pages recharges.
+     */
+    suspend fun finance(id: Long, before: String = "", rechargeBefore: String = ""): ApiResponse<MemberFinanceData> {
+        val q = buildMap {
+            if (before.isNotEmpty()) put("before", before)
+            if (rechargeBefore.isNotEmpty()) put("rc_before", rechargeBefore)
+        }
         return api.get("/v1/memberships/$id/finance", query = q, authenticated = true, map = MemberFinanceData::from)
     }
 

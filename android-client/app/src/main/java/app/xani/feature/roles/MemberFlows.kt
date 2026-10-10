@@ -43,6 +43,7 @@ import app.xani.core.isolate.runFeature
 import app.xani.core.net.ApiResponse
 import app.xani.core.net.FormFieldData
 import app.xani.core.net.MemberFinanceData
+import app.xani.core.net.RechargeBriefData
 import app.xani.core.net.MembershipData
 import app.xani.core.net.MembershipStatus
 import app.xani.core.net.PersonData
@@ -430,7 +431,9 @@ internal fun MemberActionsSheet(
                 if (target.status == MembershipStatus.BLOCKED) add(MemberAct.Unblock) else add(MemberAct.Block)
             }
             if (owner.actions.transfer && target.status == MembershipStatus.ACTIVE) add(MemberAct.Transfer)
-            if (owner.actions.revoke) add(MemberAct.Remove)
+            // Remove: the engine permission, or the role-policy "can remove
+            // downline" switch — the sheet only ever opens for direct reports.
+            if (owner.actions.revoke || owner.actions.removeDownline) add(MemberAct.Remove)
         }
     }
 
@@ -441,6 +444,9 @@ internal fun MemberActionsSheet(
     val withdrawals = remember(target.id) { mutableStateListOf<WithdrawBriefData>() }
     var wdCursor by remember(target.id) { mutableStateOf("") }
     var wdLoading by remember(target.id) { mutableStateOf(false) }
+    val recharges = remember(target.id) { mutableStateListOf<RechargeBriefData>() }
+    var rcCursor by remember(target.id) { mutableStateOf("") }
+    var rcLoading by remember(target.id) { mutableStateOf(false) }
     val finScope = rememberCoroutineScope()
 
     LaunchedEffect(target.id, finKey) {
@@ -454,6 +460,23 @@ internal fun MemberActionsSheet(
         withdrawals.clear()
         withdrawals.addAll(r.withdrawals)
         wdCursor = r.next
+        recharges.clear()
+        recharges.addAll(r.recharges)
+        rcCursor = r.rechargesNext
+    }
+
+    fun moreRecharges() {
+        if (rcLoading || rcCursor.isEmpty()) return
+        rcLoading = true
+        finScope.launch {
+            val r = runFeature(null as MemberFinanceData?) { Xani.roles.finance(target.id, rechargeBefore = rcCursor).value }
+            if (r != null) {
+                val seen = recharges.mapTo(HashSet()) { it.id }
+                recharges.addAll(r.recharges.filter { seen.add(it.id) })
+                rcCursor = r.rechargesNext
+            }
+            rcLoading = false
+        }
     }
 
     fun moreWithdrawals() {
@@ -517,8 +540,36 @@ internal fun MemberActionsSheet(
                                 copy.t(Copy.RolesGiftsSent),
                                 copy.t(Copy.RolesSentLine, "coins" to g.sentCoins.toString(), "n" to g.sentCount.toString()),
                             )
+                            val rc = fin!!.recharge
+                            KeyValue(
+                                copy.t(Copy.RolesRecharges),
+                                copy.t(Copy.RolesRechargeLine, "coins" to rc.coins.toString(), "n" to rc.count.toString()) +
+                                    if (rc.pendingCount > 0L) " · " + copy.t(Copy.BalancePending, "n" to rc.pendingCount.toString()) else "",
+                            )
                         }
                     }
+                }
+                // Recharges (coin purchases), newest first, read-only.
+                if (fin != null) {
+                    item(key = "rc-title") { SectionTitle(copy.t(Copy.RolesRecharges)) }
+                    if (recharges.isEmpty()) {
+                        item(key = "rc-empty") {
+                            XaniText(
+                                copy.t(Copy.RechargeNoRequests),
+                                Type.Caption,
+                                color = ProfileTokens.Sub,
+                                fontSizeOverride = 13f,
+                                modifier = Modifier.padding(horizontal = rdp(18), vertical = rdp(8)),
+                            )
+                        }
+                    }
+                    itemsIndexed(recharges, key = { _, r -> "rc-${r.id}" }) { i, r ->
+                        RechargeRow(copy, r)
+                        if (i == recharges.lastIndex && rcCursor.isNotEmpty() && !rcLoading) {
+                            LaunchedEffect("rc-${r.id}") { moreRecharges() }
+                        }
+                    }
+                    if (rcLoading) item(key = "rc-more") { Loading() }
                 }
                 // Withdrawal requests, newest first, read-only.
                 if (fin != null) {
@@ -602,6 +653,30 @@ private fun WithdrawRow(copy: Copy, w: WithdrawBriefData) {
             }
         }
         StatusPill(withdrawStatusLabel(copy, w.status), withdrawStatusColor(w.status))
+    }
+    Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.RowLine))
+}
+
+@Composable
+private fun RechargeRow(copy: Copy, r: RechargeBriefData) {
+    Row(
+        Modifier.fillMaxWidth().background(Color.White).padding(horizontal = rdp(18), vertical = rdp(12)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            XaniText(
+                "${r.currency} ${r.price} → 🪙 ${r.coins}",
+                Type.LabelBold,
+                color = ProfileTokens.Text,
+                fontSizeOverride = 14f,
+            )
+            val sub = listOf(r.packageTitle, r.method, r.createdAt.take(10)).filter { it.isNotBlank() }.joinToString(" · ")
+            XaniText(sub, Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 12f)
+            if (r.note.isNotBlank()) {
+                XaniText(r.note, Type.Caption, color = ProfileTokens.Muted, fontSizeOverride = 11f, maxLines = 2)
+            }
+        }
+        StatusPill(withdrawStatusLabel(copy, r.status), withdrawStatusColor(r.status))
     }
     Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.RowLine))
 }

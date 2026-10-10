@@ -1,0 +1,26 @@
+{
+    "logs": [
+        {
+            "outputFile": "app.xani.app-release-3:/values_values.arsc.flat",
+            "map": [
+                {
+                    "source": "C:\\projects\\tiktok-global-platform\\client-apps\\play-ownership-apk\\app\\src\\main\\res\\values\\strings.xml",
+                    "from": {
+                        "startLines": "1",
+                        "startColumns": "4",
+                        "startOffsets": "16",
+                        "endColumns": "44",
+                        "endOffsets": "56"
+                    },
+                    "to": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "44",
+                        "endOffsets": "95"
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,8 +1,7 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import {
-  DISPOSITION,
   MEMBER_STATUS,
   REQ_STATUS,
   kindLabel,
@@ -11,16 +10,15 @@ import {
   rolesApi,
   when,
   type Membership,
-  type MembershipBrief,
   type RequestView,
   type RoleView,
   type SummaryRow,
-  type TransferPreview,
 } from '../lib/roles'
 import { Button } from '../ui/Button'
 import { Card, Field, TextArea } from '../ui/Field'
 import { PageLoader } from '../ui/Loader'
-import { Chain, Drawer, MembershipPicker, Select, StatusPill } from '../ui/Org'
+import { RevokeDrawer, TransferDrawer } from '../ui/MemberActions'
+import { Chain, Drawer, Select, StatusPill } from '../ui/Org'
 
 // ─── list ────────────────────────────────────────────────────────────────────
 
@@ -34,12 +32,19 @@ export function MembersPage() {
   const [next, setNext] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [ok, setOk] = useState('')
+  const [action, setAction] = useState<{ kind: 'transfer' | 'revoke'; m: Membership } | null>(null)
 
   useEffect(() => {
     void rolesApi.list().then((r) => {
       if (r.ok) setRoles(r.data.items || [])
     })
   }, [])
+
+  const flash = (msg: string) => {
+    setOk(msg)
+    window.setTimeout(() => setOk(''), 5000)
+  }
 
   const setParam = (k: string, v: string) => {
     const p = new URLSearchParams(params)
@@ -76,6 +81,7 @@ export function MembersPage() {
         <p>Everyone holding a role, within your reach. Open a member to see their upline, downline and history.</p>
       </div>
       {error ? <div className="err-banner">{error}</div> : null}
+      {ok ? <div className="ok-banner">{ok}</div> : null}
       <Card>
         <div className="org-toolbar">
           <div className="org-toolbar-grow">
@@ -114,7 +120,11 @@ export function MembersPage() {
           </p>
         ) : (
           <div className="table-wrap" style={{ marginTop: 16 }}>
-            <MemberTable items={items} />
+            <MemberTable
+              items={items}
+              onTransfer={(m) => setAction({ kind: 'transfer', m })}
+              onRevoke={(m) => setAction({ kind: 'revoke', m })}
+            />
           </div>
         )}
         {next ? (
@@ -125,11 +135,51 @@ export function MembersPage() {
           </div>
         ) : null}
       </Card>
+      {action?.kind === 'transfer' ? (
+        <TransferDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(v.status === REQ_STATUS.approved ? 'Shift completed.' : `Shift request ${v.code} sent for approval.`)
+            void load('', false)
+          }}
+        />
+      ) : null}
+      {action?.kind === 'revoke' ? (
+        <RevokeDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(
+              v.status === REQ_STATUS.approved
+                ? 'Role revoked — the person was notified.'
+                : `Revoke request ${v.code} sent for approval. They will be notified when it is approved.`,
+            )
+            void load('', false)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-function MemberTable({ items, showDepth }: { items: Membership[]; showDepth?: boolean }) {
+function MemberTable({
+  items,
+  showDepth,
+  onTransfer,
+  onRevoke,
+}: {
+  items: Membership[]
+  showDepth?: boolean
+  onTransfer?: (m: Membership) => void
+  onRevoke?: (m: Membership) => void
+}) {
+  const { can } = useAuth()
+  const canTransfer = !!onTransfer && can('memberships.transfer')
+  const canRevoke = !!onRevoke && can('memberships.revoke')
+  const showActions = canTransfer || canRevoke
   return (
     <table className="table">
       <thead>
@@ -142,28 +192,48 @@ function MemberTable({ items, showDepth }: { items: Membership[]; showDepth?: bo
           <th>Status</th>
           <th>Direct downline</th>
           <th>Since</th>
+          {showActions ? <th>Actions</th> : null}
         </tr>
       </thead>
       <tbody>
-        {items.map((m) => (
-          <tr key={m.id}>
-            <td>
-              <Link to={`/members/${m.id}`}>{personLabel(m)}</Link>
-              <div className="muted">@{m.username}</div>
-            </td>
-            <td>
-              <Link to={`/roles/${m.role.slug}`}>{m.role.title}</Link>
-            </td>
-            <td>{m.referral_code ? <span className="org-code">{m.referral_code}</span> : <span className="muted">—</span>}</td>
-            <td>{m.joined_code ? <span className="org-code">{m.joined_code}</span> : <span className="muted">—</span>}</td>
-            {showDepth ? <td>{m.tree_depth ?? m.depth}</td> : null}
-            <td>
-              <StatusPill kind="s" status={m.status} />
-            </td>
-            <td>{m.direct_children}</td>
-            <td>{when(m.approved_at || m.created_at)}</td>
-          </tr>
-        ))}
+        {items.map((m) => {
+          const live = m.status === MEMBER_STATUS.active || m.status === MEMBER_STATUS.suspended
+          return (
+            <tr key={m.id}>
+              <td>
+                <Link to={`/members/${m.id}`}>{personLabel(m)}</Link>
+                <div className="muted">@{m.username}</div>
+              </td>
+              <td>
+                <Link to={`/roles/${m.role.slug}`}>{m.role.title}</Link>
+              </td>
+              <td>{m.referral_code ? <span className="org-code">{m.referral_code}</span> : <span className="muted">—</span>}</td>
+              <td>{m.joined_code ? <span className="org-code">{m.joined_code}</span> : <span className="muted">—</span>}</td>
+              {showDepth ? <td>{m.tree_depth ?? m.depth}</td> : null}
+              <td>
+                <StatusPill kind="s" status={m.status} />
+              </td>
+              <td>{m.direct_children}</td>
+              <td>{when(m.approved_at || m.created_at)}</td>
+              {showActions ? (
+                <td>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {canTransfer && live ? (
+                      <Button size="sm" variant="secondary" onClick={() => onTransfer?.(m)}>
+                        Shift
+                      </Button>
+                    ) : null}
+                    {canRevoke && live ? (
+                      <Button size="sm" variant="danger" onClick={() => onRevoke?.(m)}>
+                        Revoke
+                      </Button>
+                    ) : null}
+                  </div>
+                </td>
+              ) : null}
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )
@@ -258,7 +328,7 @@ export function MemberDetailPage() {
           ) : null}
           {!revoked && can('memberships.transfer') ? (
             <Button variant="secondary" onClick={() => setAction('transfer')}>
-              Transfer
+              Shift
             </Button>
           ) : null}
           {active && can('memberships.suspend') ? (
@@ -282,7 +352,7 @@ export function MemberDetailPage() {
           {blocked && can('memberships.block') ? <Button onClick={() => setAction('unblock')}>Unblock</Button> : null}
           {!revoked && can('memberships.revoke') ? (
             <Button variant="danger" onClick={() => setAction('revoke')}>
-              Remove
+              Revoke
             </Button>
           ) : null}
           {revoked && can('memberships.create') ? (
@@ -406,7 +476,7 @@ export function MemberDetailPage() {
           onClose={() => setAction(null)}
           onDone={(v) => {
             setAction(null)
-            flash(v.status === REQ_STATUS.approved ? 'Transfer completed.' : `Transfer request ${v.code} sent for approval.`)
+            flash(v.status === REQ_STATUS.approved ? 'Shift completed.' : `Shift request ${v.code} sent for approval.`)
             void load()
           }}
         />
@@ -417,7 +487,11 @@ export function MemberDetailPage() {
           onClose={() => setAction(null)}
           onDone={(v) => {
             setAction(null)
-            flash(v.status === REQ_STATUS.approved ? 'Membership removed.' : `Removal request ${v.code} sent for approval.`)
+            flash(
+              v.status === REQ_STATUS.approved
+                ? 'Membership removed — the person was notified.'
+                : `Removal request ${v.code} sent for approval. They will be notified when it is approved.`,
+            )
             void load()
           }}
         />
@@ -447,6 +521,8 @@ function Downline({ id }: { id: string }) {
   const [next, setNext] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [ok, setOk] = useState('')
+  const [action, setAction] = useState<{ kind: 'transfer' | 'revoke'; m: Membership } | null>(null)
 
   useEffect(() => {
     void rolesApi.list().then((r) => {
@@ -475,8 +551,14 @@ function Downline({ id }: { id: string }) {
     return () => clearTimeout(t)
   }, [load])
 
+  const flash = (msg: string) => {
+    setOk(msg)
+    window.setTimeout(() => setOk(''), 5000)
+  }
+
   return (
     <Card title="Downline">
+      {ok ? <div className="ok-banner">{ok}</div> : null}
       <div className="org-toolbar">
         <Select label="Levels" value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
           <option value={1}>Direct only</option>
@@ -513,7 +595,12 @@ function Downline({ id }: { id: string }) {
         </p>
       ) : (
         <div className="table-wrap" style={{ marginTop: 16 }}>
-          <MemberTable items={items} showDepth={depth !== 1} />
+          <MemberTable
+            items={items}
+            showDepth={depth !== 1}
+            onTransfer={(m) => setAction({ kind: 'transfer', m })}
+            onRevoke={(m) => setAction({ kind: 'revoke', m })}
+          />
         </div>
       )}
       {next ? (
@@ -522,6 +609,32 @@ function Downline({ id }: { id: string }) {
             Load more
           </Button>
         </div>
+      ) : null}
+      {action?.kind === 'transfer' ? (
+        <TransferDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(v.status === REQ_STATUS.approved ? 'Shift completed.' : `Shift request ${v.code} sent for approval.`)
+            void load('', false)
+          }}
+        />
+      ) : null}
+      {action?.kind === 'revoke' ? (
+        <RevokeDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(
+              v.status === REQ_STATUS.approved
+                ? 'Role revoked — the person was notified.'
+                : `Revoke request ${v.code} sent for approval. They will be notified when it is approved.`,
+            )
+            void load('', false)
+          }}
+        />
       ) : null}
     </Card>
   )
@@ -598,149 +711,6 @@ function TransitionDrawer({
       <div className="form-actions">
         <Button variant={kind === 'block' || kind === 'suspend' ? 'danger' : 'primary'} loading={busy} onClick={() => void submit()}>
           {c.button}
-        </Button>
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-    </Drawer>
-  )
-}
-
-function TransferDrawer({ m, upline, onClose, onDone }: { m: Membership; upline: Membership[]; onClose: () => void; onDone: (v: RequestView) => void }) {
-  const [to, setTo] = useState<MembershipBrief | null>(null)
-  const [childrenOnly, setChildrenOnly] = useState(false)
-  const [note, setNote] = useState('')
-  const [preview, setPreview] = useState<TransferPreview | null>(null)
-  const [busy, setBusy] = useState<'preview' | 'submit' | null>(null)
-  const [error, setError] = useState('')
-  const exclude = useMemo(() => [m.id, ...(m.parent_id && !childrenOnly ? [m.parent_id] : [])], [m, childrenOnly])
-
-  useEffect(() => setPreview(null), [to, childrenOnly])
-
-  const runPreview = async () => {
-    if (!to) return
-    setBusy('preview')
-    setError('')
-    const r = await rolesApi.transferPreview(m.id, { new_parent_id: to.id, children_only: childrenOnly })
-    setBusy(null)
-    if (!r.ok) {
-      setError(r.message)
-      return
-    }
-    setPreview(r.data)
-  }
-
-  const submit = async () => {
-    if (!to) return
-    setBusy('submit')
-    setError('')
-    const r = await rolesApi.transfer(m.id, { new_parent_id: to.id, children_only: childrenOnly, note: note.trim() })
-    setBusy(null)
-    if (!r.ok) {
-      setError(r.message)
-      return
-    }
-    onDone(r.data)
-  }
-
-  const blocked = preview ? preview.blockers.length > 0 : true
-
-  return (
-    <Drawer title="Transfer (shift upline)" onClose={onClose}>
-      {error ? <div className="err-banner">{error}</div> : null}
-      <p style={{ margin: 0 }}>
-        <strong>{personLabel(m)}</strong> · {m.role.title} · {m.code}
-      </p>
-      <div>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-          Current upline
-        </div>
-        <Chain upline={upline} />
-      </div>
-      <label className="perm-check">
-        <input type="checkbox" checked={childrenOnly} onChange={(e) => setChildrenOnly(e.target.checked)} />
-        <span>
-          <strong>Move only their downline</strong>
-          <div className="muted">The member stays where they are; everyone directly under them moves to the new upline.</div>
-        </span>
-      </label>
-      <MembershipPicker
-        label="New upline"
-        value={to}
-        onChange={setTo}
-        exclude={exclude}
-        hint="Must hold a role allowed to have this role under it, and must not be inside the subtree being moved."
-      />
-      <TextArea label="Note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Why — shown to approvers and kept in the audit trail." />
-      {preview ? (
-        <div className={preview.blockers.length ? 'err-banner' : 'ok-banner'}>
-          {preview.blockers.length ? (
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {preview.blockers.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          ) : (
-            <>
-              Moving <strong>{preview.moving}</strong> membership{preview.moving === 1 ? '' : 's'} ({preview.direct_moving} direct) to{' '}
-              <strong>{preview.to ? personLabel(preview.to) : 'the top'}</strong>. Limit per transfer: {preview.max_allowed.toLocaleString()}.
-            </>
-          )}
-        </div>
-      ) : null}
-      <div className="form-actions">
-        {!preview || preview.blockers.length ? (
-          <Button variant="secondary" loading={busy === 'preview'} disabled={!to} onClick={() => void runPreview()}>
-            Check
-          </Button>
-        ) : null}
-        <Button loading={busy === 'submit'} disabled={!to || blocked} onClick={() => void submit()}>
-          Send transfer
-        </Button>
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-    </Drawer>
-  )
-}
-
-function RevokeDrawer({ m, onClose, onDone }: { m: Membership; onClose: () => void; onDone: (v: RequestView) => void }) {
-  const [disposition, setDisposition] = useState<number>(DISPOSITION.reparent)
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async () => {
-    if (!reason.trim()) {
-      setError('Add a reason — the person and approvers will see it.')
-      return
-    }
-    setBusy(true)
-    const r = await rolesApi.revoke(m.id, { disposition, reason: reason.trim() })
-    setBusy(false)
-    if (!r.ok) {
-      setError(r.message)
-      return
-    }
-    onDone(r.data)
-  }
-  return (
-    <Drawer title="Remove from role" onClose={onClose}>
-      {error ? <div className="err-banner">{error}</div> : null}
-      <p style={{ margin: 0 }}>
-        <strong>{personLabel(m)}</strong> · {m.role.title} · {m.code}
-        {m.direct_children ? ` · ${m.direct_children} direct downline` : ''}
-      </p>
-      <Select label="What happens to their downline" value={disposition} onChange={(e) => setDisposition(Number(e.target.value))}>
-        <option value={DISPOSITION.reparent}>Move them up to this member’s upline</option>
-        <option value={DISPOSITION.keep}>Keep them where they are (under a revoked node)</option>
-        <option value={DISPOSITION.suspend}>Suspend everyone below as well</option>
-      </Select>
-      <TextArea label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} required />
-      <div className="form-actions">
-        <Button variant="danger" loading={busy} onClick={() => void submit()}>
-          Remove
         </Button>
         <Button variant="ghost" onClick={onClose}>
           Close

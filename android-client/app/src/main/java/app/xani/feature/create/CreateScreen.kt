@@ -35,7 +35,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,12 +57,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import app.xani.core.isolate.runFeature
+import app.xani.core.lens.Lens
+import app.xani.core.lens.LensTray
 import app.xani.feature.inbox.CameraPreview
 import app.xani.feature.inbox.LocalThumb
 import app.xani.feature.inbox.TextureHolder
 import app.xani.feature.inbox.captureDir
 import app.xani.feature.upload.PostFormScreen
 import app.xani.feature.upload.TextPoster
+import app.xani.core.net.Perm
+import app.xani.core.net.can
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
 import app.xani.ui.components.pressable
@@ -92,9 +98,24 @@ fun CreateScreen(
     copy: Copy,
     active: Boolean,
     onClose: () -> Unit,
+    /**
+     * The host folded the broadcast away: the shell switches tabs and shows
+     * the return card. Deliberately not [onClose]/dismiss — the lane must stay
+     * on Live with the room composed, or leaving the screen would end it.
+     */
+    onMinimize: () -> Unit,
 ) {
     var lane by rememberSaveable { mutableStateOf(CreateLane.Post) }
     var closing by remember { mutableStateOf(false) }
+    // Going live and posting are each a permission: without Go Live the Live
+    // lane is not drawn, without Posts the Post lane is not, and a revoke
+    // mid-session moves whoever is in that flow to the lane they still hold.
+    val canGoLive = can(Perm.GoLive)
+    val canPost = can(Perm.PostCreate)
+    LaunchedEffect(canGoLive, canPost) {
+        if (!canGoLive && lane == CreateLane.Live) lane = CreateLane.Post
+        if (!canPost && canGoLive && lane == CreateLane.Post) lane = CreateLane.Live
+    }
     val slide = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
 
@@ -117,7 +138,7 @@ fun CreateScreen(
     }
 
     BackHandler(enabled = active && !closing) {
-        if (lane == CreateLane.Live) lane = CreateLane.Post else dismiss()
+        if (lane == CreateLane.Live && canPost) lane = CreateLane.Post else dismiss()
     }
 
     Box(
@@ -128,17 +149,19 @@ fun CreateScreen(
                 alpha = 0.9f + 0.1f * (1f - slide.value)
             },
     ) {
-        if (lane == CreateLane.Live) {
+        if (lane == CreateLane.Live && canGoLive) {
             CreateLiveFlow(
                 copy = copy,
                 active = active && !closing,
-                onPost = { lane = CreateLane.Post },
+                onPost = { if (canPost) lane = CreateLane.Post },
+                onMinimize = onMinimize,
             )
         } else {
             PostStudio(
                 copy = copy,
                 active = active && !closing,
                 onClose = ::dismiss,
+                showLive = canGoLive,
                 onLive = { lane = CreateLane.Live },
             )
         }
@@ -150,11 +173,13 @@ private fun PostStudio(
     copy: Copy,
     active: Boolean,
     onClose: () -> Unit,
+    showLive: Boolean,
     onLive: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val holder = remember { TextureHolder() }
+    val lensOn by Lens.post.state.collectAsState()
     var front by rememberSaveable { mutableStateOf(false) }
     var flash by rememberSaveable { mutableStateOf(false) }
     var mode by rememberSaveable { mutableStateOf(ShootMode.Fifteen) }
@@ -177,6 +202,7 @@ private fun PostStudio(
     var elapsed by remember { mutableIntStateOf(0) }
     var gallery by remember { mutableStateOf(false) }
     val cameraNeed = active && !gallery && !textPost && composing == null
+    DisposableEffect(Unit) { onDispose { Lens.post.reset() } }
     val camPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         camOk = granted
     }
@@ -379,6 +405,11 @@ private fun PostStudio(
                 enabled = cameraNeed && camOk,
                 holder = holder,
                 fallback = Color(0xFF050510),
+                // Always in the path. Attaching on the first tap instead would
+                // mean reconfiguring the sensor mid-preview, and a filter has to
+                // land on the next frame, not after a camera restart. With
+                // nothing selected the engine copies the frame through once.
+                lens = Lens.post,
             )
             if (grid) GridOverlay()
             if (flash) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.08f)))
@@ -436,6 +467,11 @@ private fun PostStudio(
                     active = grid,
                     onClick = { grid = !grid },
                 ) { CreateIco.Grid(if (grid) Color.White else CreateTokens.ToolDim, rdp(28)) }
+                LabeledTool(
+                    label = copy.t(Copy.CreateBeauty),
+                    active = !lensOn.identity,
+                    onClick = { },
+                ) { CreateIco.Beauty(Color.White, rdp(28)) }
             }
         }
 
@@ -481,8 +517,14 @@ private fun PostStudio(
                     },
                     onText = { textPost = true },
                 )
-                Spacer(Modifier.height(rdp(14)))
+                Spacer(Modifier.height(rdp(10)))
             }
+            LensTray(
+                controller = Lens.post,
+                copy = copy,
+                compact = recording,
+            )
+            Spacer(Modifier.height(rdp(10)))
 
             // Figma record row: gallery pinned left, capture ring always centered.
             Box(Modifier.fillMaxWidth().padding(horizontal = rdp(28)).height(rdp(92)), contentAlignment = Alignment.Center) {
@@ -518,8 +560,10 @@ private fun PostStudio(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     LaneTab(copy.t(Copy.CreatePost), true) { }
-                    Spacer(Modifier.width(rdp(36)))
-                    LaneTab(copy.t(Copy.CreateGoLive), false, onLive)
+                    if (showLive) {
+                        Spacer(Modifier.width(rdp(36)))
+                        LaneTab(copy.t(Copy.CreateGoLive), false, onLive)
+                    }
                 }
             } else {
                 Spacer(Modifier.height(rdp(40)))

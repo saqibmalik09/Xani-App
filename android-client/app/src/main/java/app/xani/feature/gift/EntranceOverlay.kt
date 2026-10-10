@@ -36,27 +36,50 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** How long one entrance holds the screen. */
-private const val ENTRANCE_MS = 3_500L
+/** The default hold when the store item sets no duration of its own. */
+private const val ENTRANCE_DEFAULT_MS = 5_000L
+private const val ENTRANCE_MIN_MS = 1_500L
+private const val ENTRANCE_MAX_MS = 30_000L
 private const val GAP_MS = 150L
 
 /**
- * Someone wearing an entrance effect walks in: their effect plays over the
- * broadcast for a few seconds with a "Name joined" chip, one arrival at a
- * time. A burst of arrivals queues a handful and sheds the rest — the moment
- * matters, not the backlog. Nothing here takes pointer input; taps fall
- * through to the room chrome like they do through gifts.
+ * An entrance older than this on THIS device's clock is history, not a
+ * moment: the session keeps a short replay buffer so a frame that lands
+ * mid-join still plays once the screen is up, and this bound is what stops
+ * that same buffer from resurrecting an old entrance on a later screen.
+ */
+private const val ENTRANCE_STALE_MS = 20_000L
+
+/**
+ * Someone wearing an entrance effect walks in (the host's plays on go-live
+ * too): their effect holds the broadcast for the item's own duration — five
+ * seconds when the dashboard sets none — with a "Name joined" chip and the
+ * item's sound, one arrival at a time. A burst of arrivals queues a handful
+ * and sheds the rest; replayed or stale frames are dropped, so each entrance
+ * plays exactly once. Nothing here takes pointer input; taps fall through to
+ * the room chrome like they do through gifts.
  */
 @Composable
 internal fun EntranceOverlay(roomId: Long, copy: Copy, modifier: Modifier = Modifier) {
     var playing by remember { mutableStateOf<LiveEnterEvent?>(null) }
     LaunchedEffect(roomId) {
         val lane = Channel<LiveEnterEvent>(capacity = 6, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        // The session's replay buffer hands back recent frames on collect;
+        // the seen-set makes a frame delivered twice (replay + live, or both
+        // streams) one entrance on screen.
+        val seen = LinkedHashSet<String>()
         launch {
             LiveSession.entrances.collect { ev ->
                 if (roomId != 0L && ev.roomId != roomId) return@collect
-                // Warm the asset so the entrance plays, not loads. Each loader
-                // is cached and failure-marked; a second arrival is free.
+                if (ev.receivedAtMs > 0L && System.currentTimeMillis() - ev.receivedAtMs > ENTRANCE_STALE_MS) return@collect
+                val key = "${ev.user.id}-${ev.atMs}"
+                if (!seen.add(key)) return@collect
+                if (seen.size > 64) {
+                    val it = seen.iterator(); it.next(); it.remove()
+                }
+                // Warm the asset (and the sound) so the entrance plays, not
+                // loads. Each loader is cached and failure-marked; a second
+                // arrival is free.
                 val url = giftImageUrl(ev.entranceUrl)
                 val mime = ev.entranceMime
                 when {
@@ -65,12 +88,22 @@ internal fun EntranceOverlay(roomId: Long, copy: Copy, modifier: Modifier = Modi
                         LottieLoader.prefetch(url)
                     else -> app.xani.core.media.AssetCache.prefetch(url)
                 }
+                if (ev.soundUrl.isNotEmpty()) GiftSound.prefetch(ev.soundUrl)
                 lane.trySend(ev)
             }
         }
         for (ev in lane) {
             playing = ev
-            delay(ENTRANCE_MS)
+            // The item's own duration rules; the dashboard default is 5 s.
+            val hold = if (ev.durationMs > 0) {
+                ev.durationMs.toLong().coerceIn(ENTRANCE_MIN_MS, ENTRANCE_MAX_MS)
+            } else {
+                ENTRANCE_DEFAULT_MS
+            }
+            // The item's sound plays to everyone for as long as the effect
+            // holds; the shared player clips it if a gift sound takes over.
+            if (ev.soundUrl.isNotEmpty()) GiftSound.play(ev.soundUrl, hold)
+            delay(hold)
             playing = null
             delay(GAP_MS)
         }

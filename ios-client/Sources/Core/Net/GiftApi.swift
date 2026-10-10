@@ -134,10 +134,16 @@ struct LiveGiftEvent: Decodable, Equatable, Identifiable {
     var receiverDiamonds: Int64 = 0
     /// The room's running gift total after this one.
     var roomCoins: Int64 = 0
+    /// Engine v2: the receiver's day so far, their take this live, and what
+    /// the sender got back. 0 on frames from before the engine.
+    var receiverTodayDiamonds: Int64 = 0
+    var receiverLiveCoins: Int64 = 0
+    var cashbackCoins: Int64 = 0
     var atMs: Int64 = 0
 
     private enum CodingKeys: String, CodingKey {
-        case id, roomId, clientId, gift, sender, receiver, count, combo, totalCoins, receiverDiamonds, roomCoins, atMs
+        case id, roomId, clientId, gift, sender, receiver, count, combo, totalCoins, receiverDiamonds, roomCoins
+        case receiverTodayDiamonds, receiverLiveCoins, cashbackCoins, atMs
     }
     init() {}
     init(from decoder: Decoder) throws {
@@ -149,6 +155,8 @@ struct LiveGiftEvent: Decodable, Equatable, Identifiable {
         count = max(1, Int(c.int64(.count))); combo = max(1, Int(c.int64(.combo)))
         totalCoins = c.int64(.totalCoins); receiverDiamonds = c.int64(.receiverDiamonds)
         roomCoins = c.int64(.roomCoins); atMs = c.int64(.atMs)
+        receiverTodayDiamonds = c.int64(.receiverTodayDiamonds); receiverLiveCoins = c.int64(.receiverLiveCoins)
+        cashbackCoins = c.int64(.cashbackCoins)
     }
 }
 

@@ -1,6 +1,7 @@
 package app.xani
 
 import android.app.Application
+import app.xani.feature.call.IncomingCallNotifier
 import app.xani.feature.call.PushRegistrar
 
 /**
@@ -12,5 +13,6 @@ class XaniApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         PushRegistrar.boot(this)
+        IncomingCallNotifier.warm(this)
     }
 }

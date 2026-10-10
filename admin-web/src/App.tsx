@@ -5,6 +5,9 @@ import { Shell } from './layout/Shell'
 import { PageLoader } from './ui/Loader'
 
 const LoginPage = lazy(() => import('./pages/Login').then((m) => ({ default: m.LoginPage })))
+const JoinApplyPage = lazy(() => import('./pages/JoinApply').then((m) => ({ default: m.JoinApplyPage })))
+const PublicProfilePage = lazy(() => import('./pages/PublicProfile').then((m) => ({ default: m.PublicProfilePage })))
+const PublicLivePage = lazy(() => import('./pages/PublicLive').then((m) => ({ default: m.PublicLivePage })))
 const ForbiddenPage = lazy(() => import('./pages/Forbidden').then((m) => ({ default: m.ForbiddenPage })))
 const DashboardPage = lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.DashboardPage })))
 const ProfilePage = lazy(() => import('./pages/Profile').then((m) => ({ default: m.ProfilePage })))
@@ -52,6 +55,15 @@ const AccountModerationPage = lazy(() =>
 const AccountDevicesPage = lazy(() =>
   import('./pages/AccountTools').then((m) => ({ default: m.AccountDevicesPage })),
 )
+const FeatureAccessPage = lazy(() =>
+  import('./pages/FeatureAccess').then((m) => ({ default: m.FeatureAccessPage })),
+)
+const ContactSyncPage = lazy(() =>
+  import('./pages/ContactSync').then((m) => ({ default: m.ContactSyncPage })),
+)
+const AppVersionsPage = lazy(() =>
+  import('./pages/AppVersions').then((m) => ({ default: m.AppVersionsPage })),
+)
 const GiftsPage = lazy(() => import('./pages/Gifts').then((m) => ({ default: m.GiftsPage })))
 const StickersPage = lazy(() => import('./pages/Stickers').then((m) => ({ default: m.StickersPage })))
 const BannersPage = lazy(() => import('./pages/Banners').then((m) => ({ default: m.BannersPage })))
@@ -67,9 +79,27 @@ const LevelUserDetailPage = lazy(() =>
   import('./pages/LevelUserDetail').then((m) => ({ default: m.LevelUserDetailPage })),
 )
 const LivePage = lazy(() => import('./pages/Live').then((m) => ({ default: m.LivePage })))
+const LiveTimePage = lazy(() => import('./pages/LiveTime').then((m) => ({ default: m.LiveTimePage })))
+const LiveRewardsPage = lazy(() => import('./pages/LiveRewards').then((m) => ({ default: m.LiveRewardsPage })))
+const GiftingPage = lazy(() => import('./pages/Gifting').then((m) => ({ default: m.GiftingPage })))
 const WithdrawalsPage = lazy(() => import('./pages/Withdrawals').then((m) => ({ default: m.WithdrawalsPage })))
 const PaymentMethodsPage = lazy(() =>
   import('./pages/PaymentMethods').then((m) => ({ default: m.PaymentMethodsPage })),
+)
+const RechargePage = lazy(() => import('./pages/Recharge').then((m) => ({ default: m.RechargePage })))
+const SellersPage = lazy(() => import('./pages/Sellers').then((m) => ({ default: m.SellersPage })))
+const SellerTransactionsPage = lazy(() =>
+  import('./pages/SellerTransactions').then((m) => ({ default: m.SellerTransactionsPage })),
+)
+const SellerDisputesPage = lazy(() =>
+  import('./pages/SellerDisputes').then((m) => ({ default: m.SellerDisputesPage })),
+)
+const SettingsSellersPage = lazy(() =>
+  import('./pages/SettingsSellers').then((m) => ({ default: m.SettingsSellersPage })),
+)
+const UserLedgerPage = lazy(() => import('./pages/UserLedger').then((m) => ({ default: m.UserLedgerPage })))
+const UserPermissionsPage = lazy(() =>
+  import('./pages/UserPermissions').then((m) => ({ default: m.UserPermissionsPage })),
 )
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -101,6 +131,10 @@ function AppRoutes() {
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/join/:code/:role" element={<JoinApplyPage />} />
+        <Route path="/u/:username" element={<PublicProfilePage />} />
+        <Route path="/@:username" element={<PublicProfilePage />} />
+        <Route path="/live/:roomId" element={<PublicLivePage />} />
         <Route path="/forbidden" element={<ForbiddenPage />} />
         <Route
           path="/"
@@ -281,6 +315,30 @@ function AppRoutes() {
             }
           />
           <Route
+            path="live-time/*"
+            element={
+              <RequirePerm perm="live.view_time">
+                <LiveTimePage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="live-rewards/*"
+            element={
+              <RequirePerm perm="reward.view">
+                <LiveRewardsPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="gifting/*"
+            element={
+              <RequirePerm perm="gift.view">
+                <GiftingPage />
+              </RequirePerm>
+            }
+          />
+          <Route
             path="withdrawals"
             element={
               <RequirePerm perm="finance.manage_withdrawals">
@@ -293,6 +351,62 @@ function AppRoutes() {
             element={
               <RequirePerm perm="finance.manage_withdrawals">
                 <PaymentMethodsPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="recharge"
+            element={
+              <RequirePerm perm="finance.manage_recharge">
+                <RechargePage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="sellers"
+            element={
+              <RequirePerm anyOf={['sellers.manage', 'sellers.view']}>
+                <SellersPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="sellers/transactions"
+            element={
+              <RequirePerm anyOf={['sellers.manage', 'sellers.view']}>
+                <SellerTransactionsPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="sellers/disputes"
+            element={
+              <RequirePerm anyOf={['sellers.manage', 'sellers.view']}>
+                <SellerDisputesPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="settings/sellers"
+            element={
+              <RequirePerm anyOf={['sellers.manage', 'admin.manage_settings']}>
+                <SettingsSellersPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="users/:id/ledger"
+            element={
+              <RequirePerm perm="finance.view_ledger">
+                <UserLedgerPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="users/:id/permissions"
+            element={
+              <RequirePerm perm="admin.manage_permissions">
+                <UserPermissionsPage />
               </RequirePerm>
             }
           />
@@ -366,6 +480,30 @@ function AppRoutes() {
             element={
               <RequirePerm perm="admin.manage_permissions">
                 <PermissionsPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="feature-access"
+            element={
+              <RequirePerm perm="access.manage_features">
+                <FeatureAccessPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="contact-sync"
+            element={
+              <RequirePerm perm="contacts.view_sync">
+                <ContactSyncPage />
+              </RequirePerm>
+            }
+          />
+          <Route
+            path="app-versions"
+            element={
+              <RequirePerm perm="app.manage_versions">
+                <AppVersionsPage />
               </RequirePerm>
             }
           />

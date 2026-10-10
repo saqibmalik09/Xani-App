@@ -148,6 +148,8 @@ data class LiveRoomData(
     val hostAway: Boolean = false,
     /** Coins gifted into the room so far. */
     val giftCoins: Long = 0L,
+    /** Diamonds actually credited to receivers here — the 💎 pill's number. */
+    val giftDiamonds: Long = 0L,
     /** Audio seats, host included (0 on a video room). */
     val seats: Int = 0,
     /** Video: viewers may ask to co-host. */
@@ -164,6 +166,7 @@ data class LiveRoomData(
             peakViewers = json.long("peak_viewers"), guests = json.int("guests"),
             audience = json.str("audience", "public"), locked = json.bool("locked"),
             hostAway = json.bool("host_away"), giftCoins = json.long("gift_coins"),
+            giftDiamonds = json.long("gift_diamonds"),
             seats = json.int("seats"), requests = json.bool("requests", true),
             pk = json.obj("pk")?.let(PkData::from),
         )
@@ -212,6 +215,13 @@ data class PkData(
     val showingResult: Boolean get() = phase == "result"
     val draw: Boolean get() = showingResult && winnerId == 0L
 
+    /**
+     * The opponent closed their own live, so the battle is over but this room
+     * is still on air. A local phase, never one the server sends: it holds the
+     * arena long enough to say the other side left.
+     */
+    val opponentLeft: Boolean get() = phase == PhaseLeft
+
     fun sideFor(hostId: Long): PkSideData? = when (hostId) {
         left.host.id -> left
         right.host.id -> right
@@ -225,6 +235,8 @@ data class PkData(
     }
 
     companion object {
+        const val PhaseLeft = "left"
+
         fun from(json: JSONObject) = PkData(
             id = json.id("id"),
             phase = json.str("phase", "fighting"),
@@ -301,6 +313,12 @@ data class StageMemberData(
     val muted: Boolean,
     val satAtMs: Long,
     val coins: Long,
+    /**
+     * This person is publishing their camera. Their own choice, never the
+     * host's: it stays false until they turn it on, so a tile draws the
+     * profile picture and not a stranger's room.
+     */
+    val cam: Boolean = false,
 ) {
     companion object {
         fun from(json: JSONObject) = StageMemberData(
@@ -309,6 +327,7 @@ data class StageMemberData(
             muted = json.bool("muted"),
             satAtMs = json.long("sat_at_ms"),
             coins = json.long("coins"),
+            cam = json.bool("cam"),
         )
     }
 }
@@ -325,6 +344,8 @@ data class StageData(
     val requests: Boolean,
     val members: List<StageMemberData>,
     val rev: Long,
+    /** Video: co-hosts may turn their camera on. Host's choice, default off. */
+    val guestCam: Boolean = false,
 ) {
     /** Everyone but the host, by seat. */
     val guests: List<StageMemberData> get() = members.filter { it.seat != 0 }
@@ -333,6 +354,8 @@ data class StageData(
     fun at(seat: Int): StageMemberData? = members.firstOrNull { it.seat == seat }
 
     companion object {
+        /** Audio rooms: host is seat 0, then guests 1…; cap includes the host. */
+        const val AudioSeatMax = 45
         val Empty = StageData(0L, "video", 0, true, emptyList(), 0L)
         fun from(json: JSONObject?) = if (json == null) Empty else StageData(
             roomId = json.id("room_id"),
@@ -341,6 +364,7 @@ data class StageData(
             requests = json.bool("requests", true),
             members = json.objects("members").map(StageMemberData::from).sortedBy { it.seat },
             rev = json.long("rev"),
+            guestCam = json.bool("guest_cam"),
         )
     }
 }
@@ -416,6 +440,29 @@ data class LiveModeratorData(val user: LivePersonData, val expiresMs: Long) {
     }
 }
 
+/**
+ * One "removed this live" row: who was blocked or kicked in the current
+ * broadcast. The record is the room's own memory — it dies with the live, so
+ * a host's block is never a standing sentence. untilMs 0 = the whole session.
+ */
+data class LiveBannedData(
+    val user: LivePersonData,
+    val reason: String,
+    val untilMs: Long,
+    val atMs: Long,
+    val active: Boolean,
+) {
+    companion object {
+        fun from(json: JSONObject) = LiveBannedData(
+            user = LivePersonData.from(json.obj("user") ?: JSONObject()),
+            reason = json.str("reason"),
+            untilMs = json.long("until_ms"),
+            atMs = json.long("at_ms"),
+            active = json.bool("active"),
+        )
+    }
+}
+
 @Immutable
 data class LivePeopleData(val items: List<LivePersonData>, val viewers: Long) {
     companion object {
@@ -444,6 +491,8 @@ data class LiveChatData(
     val reactions: Map<String, Int> = emptyMap(),
     /** The emoji I put on this line, or empty. */
     val myReaction: String = "",
+    /** A system line the device words itself ("like": sent hearts); empty for typed lines. */
+    val event: String = "",
 ) {
     companion object {
         fun from(json: JSONObject) = LiveChatData(
@@ -455,6 +504,7 @@ data class LiveChatData(
             atMs = json.long("at_ms"),
             sticker = json.obj("sticker")?.let(StickerData::from)?.takeIf { it.id != 0L },
             to = json.obj("to")?.let(LivePersonData::from)?.takeIf { it.id != 0L },
+            event = json.str("event"),
         )
     }
 }
@@ -469,7 +519,18 @@ data class LiveSummaryData(
     val uniqueViewers: Int,
     val reason: String,
     val giftCoins: Long = 0L,
+    /** Diamonds credited to receivers after the split — the end card's 💎. */
+    val giftDiamonds: Long = 0L,
     val giftCount: Int = 0,
+    /**
+     * The ledger's number for this room — what the host is credited. Wall
+     * time ([durationSeconds]) may be larger: silence inside the room
+     * ([pausedMs]) is never counted. -1 when the server did not answer.
+     */
+    val verifiedMs: Long = -1L,
+    val pausedMs: Long = 0L,
+    /** The host's accounting-day total after this room; -1 when unknown. */
+    val todayMs: Long = -1L,
 ) {
     companion object {
         fun from(json: JSONObject?) = LiveSummaryData(
@@ -480,8 +541,43 @@ data class LiveSummaryData(
             uniqueViewers = json?.int("unique_viewers") ?: 0,
             reason = json?.str("reason") ?: "",
             giftCoins = json?.long("gift_coins") ?: 0L,
+            giftDiamonds = json?.long("gift_diamonds") ?: 0L,
             giftCount = json?.int("gift_count") ?: 0,
+            verifiedMs = json?.long("verified_ms", -1L) ?: -1L,
+            pausedMs = json?.long("paused_ms") ?: 0L,
+            todayMs = json?.long("today_ms", -1L) ?: -1L,
         )
+    }
+}
+
+/**
+ * The verified-time HUD contract, carried on start and on every host /
+ * co-host heartbeat. The device shows this and only this: [verifiedMs] is the
+ * ledger's figure as of [serverNowMs]; the screen advances it locally while
+ * [counting] and stops once the last ack is older than [allowanceSeconds] —
+ * exactly when the server stops too.
+ */
+@Immutable
+data class LiveTimeView(
+    val verifiedMs: Long,
+    val counting: Boolean,
+    val pausedMs: Long,
+    val segmentNo: Int,
+    val serverNowMs: Long,
+    val allowanceSeconds: Int,
+) {
+    companion object {
+        fun from(json: JSONObject?): LiveTimeView? {
+            json ?: return null
+            return LiveTimeView(
+                verifiedMs = json.long("verified_ms"),
+                counting = json.bool("counting"),
+                pausedMs = json.long("paused_ms"),
+                segmentNo = json.int("segment_no"),
+                serverNowMs = json.long("server_now_ms"),
+                allowanceSeconds = json.int("allowance_seconds", 30).coerceAtLeast(1),
+            )
+        }
     }
 }
 
@@ -495,6 +591,10 @@ data class LiveStartData(
     /** A stale room this start replaced (the previous End never arrived). */
     val replacedRoomId: Long,
     val stage: StageData = StageData.Empty,
+    /** The HUD's starting point: the ledger's zero, or its figure on a resume. */
+    val time: LiveTimeView? = null,
+    /** The same go-live (client_id) was already open; this is that room, not a new one. */
+    val resumed: Boolean = false,
 )
 
 @Immutable
@@ -514,7 +614,12 @@ data class LiveJoinData(
 )
 
 @Immutable
-data class LiveHeartbeatData(val room: LiveRoomData, val live: Boolean)
+data class LiveHeartbeatData(
+    val room: LiveRoomData,
+    val live: Boolean,
+    /** Host / co-host: the ledger's running figure. Null for viewers. */
+    val time: LiveTimeView? = null,
+)
 
 /** One call or live frame off the stream, already typed. */
 sealed class CallEvent {
@@ -535,7 +640,14 @@ sealed class CallEvent {
     data class Participant(val callId: Long, val userId: Long, val state: String) : CallEvent()
     data class Room(val room: RoomJoinData) : CallEvent()
     data class LiveViewers(val roomId: Long, val viewers: Long) : CallEvent()
-    data class LiveGuest(val roomId: Long, val sfu: RoomJoinData, val seat: Int = 0) : CallEvent()
+    /** [regrant]: already on stage — a fresh door because the host changed the camera rule. */
+    data class LiveGuest(
+        val roomId: Long,
+        val sfu: RoomJoinData,
+        val seat: Int = 0,
+        val regrant: Boolean = false,
+        val guestCam: Boolean = false,
+    ) : CallEvent()
     data class LiveEnded(val roomId: Long, val reason: String, val summary: LiveSummaryData?) : CallEvent()
     /** Host only: someone asked to co-host (`add`) or is no longer asking (`remove`). */
     data class LiveStageRequest(val roomId: Long, val op: String, val user: LivePersonData, val atMs: Long) : CallEvent()
@@ -585,7 +697,7 @@ sealed class CallEvent {
             "call_participant" -> Participant(data.id("call_id"), data.id("user_id"), data.str("state"))
             "call_room" -> Room(RoomJoinData.from(data))
             "live_viewers" -> LiveViewers(data.id("room_id"), data.long("viewers"))
-            "live_guest" -> LiveGuest(data.id("room_id"), RoomJoinData.from(data.obj("sfu") ?: JSONObject()), data.int("seat"))
+            "live_guest" -> LiveGuest(data.id("room_id"), RoomJoinData.from(data.obj("sfu") ?: JSONObject()), data.int("seat"), data.bool("regrant"), data.bool("guest_cam"))
             "live_stage_request" -> LiveStageRequest(
                 data.id("room_id"), data.str("op", "add"),
                 LivePersonData.from(data.obj("user") ?: JSONObject()), data.long("at_ms"),
@@ -688,10 +800,16 @@ class CallApi internal constructor(private val api: ApiClient) {
         coverUrl: String = "",
         audience: String = "public",
         password: String = "",
-        /** Audio: seats including the host (2..35). Video: 0. */
+        /** Audio: seats including the host (2..45). Video: 0. */
         seats: Int = 0,
         /** Video: may viewers ask to co-host. */
         requests: Boolean = true,
+        /**
+         * This device's key for this one go-live. A retry after a transport
+         * failure sends the same key and gets the same room back — the time
+         * already verified is kept, not restarted.
+         */
+        clientId: String = "",
     ): ApiResponse<LiveStartData> =
         api.post(
             "/v1/live/rooms",
@@ -699,6 +817,7 @@ class CallApi internal constructor(private val api: ApiClient) {
                 "kind" to kind, "title" to title, "tint" to tint, "cover_url" to coverUrl,
                 "audience" to audience, "password" to password,
                 "seats" to seats, "requests" to requests,
+                "client_id" to clientId.ifBlank { null },
             ),
             authenticated = true,
         ) { d ->
@@ -711,6 +830,8 @@ class CallApi internal constructor(private val api: ApiClient) {
                 heartbeatSeconds = d.int("heartbeat_seconds", 15),
                 replacedRoomId = room.id("replaced_room_id"),
                 stage = StageData.from(d.obj("stage")),
+                time = LiveTimeView.from(d.obj("time")),
+                resumed = d.bool("resumed"),
             )
         }
 
@@ -720,12 +841,13 @@ class CallApi internal constructor(private val api: ApiClient) {
         api.get("/v1/live/rooms/$roomId/stage", authenticated = true) { StageData.from(it.obj("stage")) }
 
     /** Host policy: pass only what changes. */
-    suspend fun stageSettings(roomId: Long, seats: Int? = null, requests: Boolean? = null): ApiResponse<StageData> =
+    suspend fun stageSettings(roomId: Long, seats: Int? = null, requests: Boolean? = null, guestCam: Boolean? = null): ApiResponse<StageData> =
         api.post(
             "/v1/live/rooms/$roomId/stage/settings",
             JSONObject().apply {
                 if (seats != null) put("seats", seats)
                 if (requests != null) put("requests", requests)
+                if (guestCam != null) put("guest_cam", guestCam)
             },
             authenticated = true,
         ) { StageData.from(it.obj("stage")) }
@@ -756,6 +878,13 @@ class CallApi internal constructor(private val api: ApiClient) {
     suspend fun stageMute(roomId: Long, muted: Boolean): ApiResponse<Unit> =
         api.post("/v1/live/rooms/$roomId/stage/mute", jsonOf("muted" to muted), authenticated = true)
 
+    /**
+     * My own camera state for my co-host tile. Refused while the host keeps
+     * co-host cameras closed, so the tile and the SFU never disagree.
+     */
+    suspend fun stageCam(roomId: Long, on: Boolean): ApiResponse<Unit> =
+        api.post("/v1/live/rooms/$roomId/stage/cam", jsonOf("on" to on), authenticated = true)
+
     // ─── hearts · reactions · moderation ─────────────────────────────────────
 
     /** [n] hearts tapped since the last call; the reply is the room total. */
@@ -782,9 +911,14 @@ class CallApi internal constructor(private val api: ApiClient) {
             authenticated = true,
         ) { LiveModeratorData.from(it.obj("moderator") ?: JSONObject()) }
 
+    /** Host or moderator: who was blocked or removed in this broadcast. */
+    suspend fun sessionBans(roomId: Long): ApiResponse<List<LiveBannedData>> =
+        api.get("/v1/live/rooms/$roomId/banned", authenticated = true) { d -> d.objects("items").map(LiveBannedData::from) }
+
     /**
      * Host or moderator: [action] mute | unmute | block | unblock | kick on
-     * [userId]; [minutes] bounds mute and block. Reply: when it lifts (ms), 0 = untimed.
+     * [userId]; [minutes] bounds mute — a block is always for this session.
+     * Reply: when it lifts (ms), 0 = untimed / the rest of the session.
      */
     suspend fun moderate(roomId: Long, userId: Long, action: String, minutes: Int = 0): ApiResponse<Long> =
         api.post(
@@ -821,6 +955,14 @@ class CallApi internal constructor(private val api: ApiClient) {
     suspend fun pkDecline(inviteId: Long): ApiResponse<Unit> =
         api.post("/v1/live/pk/decline", jsonOf("invite_id" to inviteId.toString()), authenticated = true)
 
+    /**
+     * A subscribe-only seat in the opponent's SFU room, for anyone inside
+     * [roomId] while a battle is on. This is how the other half of a PK
+     * reaches a phone: one extra subscription, no second camera capture.
+     */
+    suspend fun pkWatchSeat(roomId: Long): ApiResponse<RoomJoinData> =
+        api.post("/v1/live/rooms/$roomId/pk/seat", JSONObject(), authenticated = true) { RoomJoinData.from(it) }
+
     suspend fun pkEnd(roomId: Long): ApiResponse<Unit> =
         api.post("/v1/live/rooms/$roomId/pk/end", JSONObject(), authenticated = true)
 
@@ -833,7 +975,11 @@ class CallApi internal constructor(private val api: ApiClient) {
 
     suspend fun liveHeartbeat(roomId: Long, mode: String): ApiResponse<LiveHeartbeatData> =
         api.post("/v1/live/rooms/$roomId/heartbeat", jsonOf("mode" to mode), authenticated = true) { d ->
-            LiveHeartbeatData(room = LiveRoomData.from(d.obj("room") ?: JSONObject()), live = d.bool("live", false))
+            LiveHeartbeatData(
+                room = LiveRoomData.from(d.obj("room") ?: JSONObject()),
+                live = d.bool("live", false),
+                time = LiveTimeView.from(d.obj("time")),
+            )
         }
 
     suspend fun liveOpen(limit: Int = 50): ApiResponse<List<LiveRoomData>> =

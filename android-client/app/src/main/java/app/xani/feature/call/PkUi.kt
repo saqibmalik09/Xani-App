@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,8 +25,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,13 +36,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import app.xani.core.isolate.runFeature
 import app.xani.core.net.PkData
 import app.xani.core.net.PkHostHitData
@@ -61,6 +55,9 @@ import app.xani.ui.components.XaniText
 import app.xani.ui.components.pressable
 import app.xani.ui.theme.Type
 import app.xani.ui.theme.rdp
+import app.xani.ui.vector.VShape
+import app.xani.ui.vector.VectorCanvas
+import app.xani.ui.vector.stroke
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -72,10 +69,8 @@ private val PkBlue = Color(0xFF3B82F6)
 private val PkOrange = Color(0xFFF97316)
 private val PkInk = Color(0xFF0B0818)
 
-/** Results list in the invite sheet: resting height and the drag bounds, dp. */
-private const val PkListDefaultDp = 340f
-private const val PkListMinDp = 160f
-private const val PkListMaxDp = 520f
+/** Results list height in the invite sheet, dp — tall enough for six hosts. */
+private const val PkListDp = 340f
 
 /**
  * Host sheet: pick a duration, search a live host, tap to invite.
@@ -93,11 +88,6 @@ internal fun PkInviteSheet(
     var hits by remember { mutableStateOf<List<PkHostHitData>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var sentTo by remember { mutableStateOf(0L) }
-    // Height of the results list, in dp. Starts tall enough for six hosts
-    // and follows the grip between the field and the list: pull up for
-    // more rows, down for fewer. Bounded so the sheet never leaves the screen.
-    var listDp by remember { mutableFloatStateOf(PkListDefaultDp) }
-    val density = LocalDensity.current
 
     LaunchedEffect(query, roomId) {
         delay(280)
@@ -201,28 +191,11 @@ internal fun PkInviteSheet(
                 )
             }
 
-            // The grip: a vertical pull here resizes the list. It consumes the
-            // drag itself, so the sheet underneath does not slide with it.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(rdp(22))
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures { change, dy ->
-                            change.consume()
-                            listDp = (listDp - dy / density.density).coerceIn(PkListMinDp, PkListMaxDp)
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    Modifier
-                        .size(width = rdp(36), height = rdp(4))
-                        .clip(RoundedCornerShape(rdp(2)))
-                        .background(Color.White.copy(alpha = 0.22f)),
-                )
-            }
-            val listHeight = rdp(listDp)
+            Spacer(Modifier.height(rdp(14)))
+            // Fixed height: the sheet itself is what the thumb drags up and
+            // down (LiveSheet owns that gesture), and this list scrolls its
+            // rows, so the two never fight for the same vertical pull.
+            val listHeight = rdp(PkListDp)
             when {
                 searching && hits.isEmpty() -> Box(
                     Modifier.fillMaxWidth().height(listHeight),
@@ -392,7 +365,9 @@ internal fun PkArena(
                     leading = leader == opp.host.id,
                     copy = copy,
                     video = null,
-                    remoteOf = opp.host.id,
+                    // Their live is gone: no picture to ask for, say so instead.
+                    remoteOf = if (pk.opponentLeft) null else opp.host.id,
+                    gone = pk.opponentLeft,
                     mediaRev = mediaRev,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
@@ -406,24 +381,44 @@ internal fun PkArena(
                     .background(Brush.verticalGradient(listOf(Color.Transparent, PkPurple, PkPink, Color.Transparent))),
             )
 
-            PkClock(
-                pk = pk,
-                remain = remain,
-                copy = copy,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = rdp(8)),
-            )
+            // No clock once the opponent has gone: there is nothing left to
+            // count, and a frozen 0:00 reads as a broken broadcast.
+            if (!pk.opponentLeft) {
+                PkClock(
+                    pk = pk,
+                    remain = remain,
+                    copy = copy,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = rdp(8)),
+                )
+            }
 
+            // Either host stops the fight from here. Red on a solid plate, not
+            // dark-on-video at 10sp: this is the only thing on the arena a host
+            // needs to find in a hurry, and it has to read as a button over
+            // whatever the opponent's camera happens to be showing behind it.
             if (isHost && pk.fighting) {
-                Box(
+                Row(
                     Modifier
                         .align(Alignment.TopEnd)
                         .padding(rdp(8))
-                        .clip(RoundedCornerShape(rdp(12)))
-                        .background(Color.Black.copy(alpha = 0.45f))
-                        .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(rdp(12)))
+                        .clip(RoundedCornerShape(rdp(14)))
+                        .background(Color(0xF2EF4444))
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(rdp(14)))
                         .pressable(pressedScale = 0.94f, onClick = { LiveSession.endPk() })
-                        .padding(horizontal = rdp(10), vertical = rdp(5)),
-                ) { XaniText(copy.t(Copy.PkEnd), Type.LabelBold, color = Color.White, fontSizeOverride = 10f) }
+                        .padding(horizontal = rdp(12), vertical = rdp(7)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(rdp(5)),
+                ) {
+                    VectorCanvas(
+                        shapes = listOf(
+                            VShape.Line(18f, 6f, 6f, 18f, stroke(Color.White, 2.4f)),
+                            VShape.Line(6f, 6f, 18f, 18f, stroke(Color.White, 2.4f)),
+                        ),
+                        viewport = 24f,
+                        modifier = Modifier.size(rdp(11)),
+                    )
+                    XaniText(copy.t(Copy.PkEnd), Type.LabelBold, color = Color.White, fontSizeOverride = 12f)
+                }
             }
 
             if (pk.showingResult) {
@@ -555,10 +550,11 @@ private fun PkScoreBar(mine: Long, opp: Long, modifier: Modifier) {
 
 /**
  * One half. [video] is the caller's own picture (host preview / primary
- * host track); when absent and [remoteOf] is set, the SFU track that user
- * cross-published here, then HLS, then the avatar. The remote ask is retried
- * a bounded number of times: a late track lands within a few seconds or the
- * HLS carries the half — never a loop for the life of the fight.
+ * host track); when absent and [remoteOf] is set, the SFU track from the
+ * subscribe-only seat in their room, then HLS, then the avatar. The remote
+ * ask is retried a bounded number of times: a late track lands within a few
+ * seconds or the HLS carries the half — never a loop for the life of the
+ * fight. [gone] is their live having closed: their avatar, and said plainly.
  */
 @Composable
 private fun PkHalf(
@@ -570,10 +566,12 @@ private fun PkHalf(
     remoteOf: Long?,
     mediaRev: Int,
     modifier: Modifier,
+    gone: Boolean = false,
 ) {
     val name = side.host.fullName.ifBlank { side.host.username }
     Box(modifier.background(PkInk)) {
         when {
+            gone -> AvatarHalf(side = side, hint = copy.t(Copy.PkHostLeft))
             video != null -> video()
             remoteOf != null -> RemoteHalf(side = side, userId = remoteOf, mediaRev = mediaRev, copy = copy)
             else -> AvatarHalf(side = side, hint = "")
@@ -637,9 +635,9 @@ private const val PkRemoteRetryMs = 700L
 private fun RemoteHalf(side: PkSideData, userId: Long, mediaRev: Int, copy: Copy) {
     val ctx = LocalContext.current
     var retry by remember(userId, mediaRev) { mutableIntStateOf(0) }
-    val remote = remember(userId, mediaRev, retry) { LiveSession.remoteView(ctx, userId) }
+    val remote = remember(userId, mediaRev, retry) { LiveSession.pkRemoteView(ctx, userId) }
     when {
-        remote != null -> key(remote) { AndroidView(factory = { remote }, modifier = Modifier.fillMaxSize()) }
+        remote != null -> VideoSurface(remote, Modifier.fillMaxSize())
         side.hlsUrl.isNotBlank() -> {
             HlsPlayerView(side.hlsUrl, Modifier.fillMaxSize())
             // Keep asking briefly for the sharper SFU track behind the HLS.

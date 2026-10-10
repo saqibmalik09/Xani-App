@@ -68,6 +68,9 @@ enum Xani {
     /// Typed live gift endpoints (catalog, send, room stream).
     static var gifts: GiftApi { GiftApi(api: api) }
 
+    /// Gifting engine: rule-aware catalog tree and per-user statements.
+    static var gifting: GiftingApi { GiftingApi(api: api) }
+
     /// Public promotional banners by placement.
     static var banners: BannerApi { BannerApi(api: api) }
 
@@ -76,6 +79,9 @@ enum Xani {
 
     /// Organisation roles: memberships, upline/downline, referral codes, requests.
     static var roles: RolesApi { RolesApi(api: api) }
+
+    /// Live-time rewards: summary, history, eligibility before going live, claims.
+    static var rewards: RewardsApi { RewardsApi(api: api) }
 
     /// The signed-in account's id; 0 when signed out.
     static var currentUserId: Int64 {

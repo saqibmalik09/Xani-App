@@ -49,6 +49,7 @@ internal interface TokenSource {
 class ApiClient internal constructor(
     private val baseUrl: String,
     private val userAgent: String,
+    private val appVersion: String = "",
 ) {
     internal var tokens: TokenSource? = null
 
@@ -184,6 +185,7 @@ class ApiClient internal constructor(
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Content-Type", contentType)
                 setRequestProperty("User-Agent", userAgent)
+                if (appVersion.isNotEmpty()) setRequestProperty("X-App-Version", appVersion)
                 setRequestProperty("Authorization", "Bearer $bearer")
                 headers.forEach { (k, v) -> if (v.isNotEmpty()) setRequestProperty(k, v) }
             }
@@ -232,6 +234,7 @@ class ApiClient internal constructor(
                 setRequestProperty("Content-Type", contentType)
                 if (sha256Hex.isNotEmpty()) setRequestProperty("X-Part-Sha256", sha256Hex)
                 setRequestProperty("User-Agent", userAgent)
+                if (appVersion.isNotEmpty()) setRequestProperty("X-App-Version", appVersion)
                 setRequestProperty("Authorization", "Bearer $bearer")
             }
             connection.outputStream.use { out ->
@@ -305,6 +308,7 @@ class ApiClient internal constructor(
                 setRequestProperty("Accept", "text/event-stream")
                 setRequestProperty("Cache-Control", "no-store")
                 setRequestProperty("User-Agent", userAgent)
+                if (appVersion.isNotEmpty()) setRequestProperty("X-App-Version", appVersion)
                 setRequestProperty("Authorization", "Bearer $bearer")
             }
             if (connection.responseCode != HttpURLConnection.HTTP_OK) return false
@@ -453,6 +457,7 @@ class ApiClient internal constructor(
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Accept-Encoding", "gzip")
                 setRequestProperty("User-Agent", userAgent)
+                if (appVersion.isNotEmpty()) setRequestProperty("X-App-Version", appVersion)
                 bearer?.let { setRequestProperty("Authorization", "Bearer $it") }
                 if (body != null) {
                     doOutput = true

@@ -99,6 +99,18 @@ class Copy(private val lang: String) {
         const val StoreKindEntrance = "store.kind_entrance"
         const val StoreKindVip = "store.kind_vip"
         const val StoreKindBubbles = "store.kind_bubbles"
+        const val StoreFree = "store.free"
+        const val StoreFreeSub = "store.free_sub"
+        const val StoreTabAll = "store.tab_all"
+        const val StoreTabMine = "store.tab_mine"
+        const val StoreNew = "store.new"
+        const val StoreOwned = "store.owned"
+        const val StoreWearing = "store.wearing"
+        const val StoreParked = "store.parked"
+        const val StoreLapsed = "store.lapsed"
+        const val StoreMineEmpty = "store.mine_empty"
+        const val StoreShopEmpty = "store.shop_empty"
+        const val StoreFreeEmpty = "store.free_empty"
         const val LiveEntranceJoined = "live.entrance_joined"
         const val LiveSendGift = "live.send_gift"
         const val LiveGiftsTitle = "live.gifts_title"
@@ -109,6 +121,9 @@ class Copy(private val lang: String) {
         const val LiveGiftNotEnough = "live.gift_not_enough"
         const val LiveGiftNotEnoughTitle = "live.gift_not_enough_title"
         const val LiveGiftNotEnoughBody = "live.gift_not_enough_body"
+        const val LiveGiftNotEnoughMultiBody = "live.gift_not_enough_multi_body"
+        const val LiveGiftRecipients = "live.gift_recipients"
+        const val LiveGiftToOthers = "live.gift_to_others"
         const val LiveGiftFailed = "live.gift_failed"
         const val LiveGiftFailedTitle = "live.gift_failed_title"
         const val LiveGiftDismiss = "live.gift_dismiss"
@@ -121,6 +136,30 @@ class Copy(private val lang: String) {
         const val LiveGiftHost = "live.gift_host"
         const val LiveGiftCombo = "live.gift_combo"
         const val LiveGiftLuckyHint = "live.gift_lucky_hint"
+        const val LiveGiftLocked = "live.gift_locked"
+        const val LiveGiftLockedTitle = "live.gift_locked_title"
+        const val GiftingTabProfile = "gifting.tab_profile"
+        const val GiftingTabGifting = "gifting.tab_gifting"
+        const val GiftingThisLive = "gifting.this_live"
+        const val GiftingToday = "gifting.today"
+        const val GiftingWeek = "gifting.week"
+        const val GiftingMonth = "gifting.month"
+        const val GiftingDates = "gifting.dates"
+        const val GiftingTopSenders = "gifting.top_senders"
+        const val GiftingTopReceivers = "gifting.top_receivers"
+        const val GiftingLatest = "gifting.latest"
+        const val GiftingReceived = "gifting.received"
+        const val GiftingSent = "gifting.sent"
+        const val GiftingDiamonds = "gifting.diamonds"
+        const val GiftingCoins = "gifting.coins"
+        const val GiftingGiftsN = "gifting.gifts_n"
+        const val GiftingEmpty = "gifting.empty"
+        const val GiftingPrivate = "gifting.private"
+        const val GiftingLoadFailed = "gifting.load_failed"
+        const val GiftingRetry = "gifting.retry"
+        const val GiftingShow = "gifting.show"
+        const val GiftingLive = "gifting.live"
+        const val GiftingCashback = "gifting.cashback"
         const val LiveStickers = "live.stickers"
         const val LiveStickerTo = "live.sticker_to"
         const val LiveStickerEveryone = "live.sticker_everyone"
@@ -159,6 +198,7 @@ class Copy(private val lang: String) {
         const val ProfileNoSaved = "profile.no_saved"
         const val ProfileNoPrivate = "profile.no_private"
         const val ProfileReceivingEmpty = "profile.receiving_empty"
+        const val ProfileSendingEmpty = "profile.sending_empty"
         const val TxnTitle = "txn.title"
         const val TxnSpent = "txn.spent"
         const val TxnEarned = "txn.earned"
@@ -211,13 +251,122 @@ class Copy(private val lang: String) {
         const val WithdrawNoRequests = "withdraw.no_requests"
         const val WithdrawCountry = "withdraw.country"
         const val WithdrawAll = "withdraw.all"
+        const val BalanceTitle = "balance.title"
+        const val BalanceCoins = "balance.coins"
+        const val BalanceDiamonds = "balance.diamonds"
+        const val BalanceBeans = "balance.beans"
+        const val BalanceRecharge = "balance.recharge"
+        const val BalanceWithdraw = "balance.withdraw"
+        const val BalanceHistory = "balance.history"
+        const val BalancePending = "balance.pending"
+        const val BalanceRecent = "balance.recent"
+        const val RechargeTitle = "recharge.title"
+        const val RechargeTabPackages = "recharge.tab_packages"
+        const val RechargeTabRequests = "recharge.tab_requests"
+        const val RechargePickPackage = "recharge.pick_package"
+        const val RechargeNoPackages = "recharge.no_packages"
+        const val RechargePickMethod = "recharge.pick_method"
+        const val RechargeNoMethods = "recharge.no_methods"
+        const val RechargeBonus = "recharge.bonus"
+        const val RechargeSendExactly = "recharge.send_exactly"
+        const val RechargeAccountTitle = "recharge.account_title"
+        const val RechargeAccountNo = "recharge.account_no"
+        const val RechargeCopy = "recharge.copy"
+        const val RechargeCopied = "recharge.copied"
+        const val RechargeInstructions = "recharge.instructions"
+        const val RechargeProof = "recharge.proof"
+        const val RechargeProofHint = "recharge.proof_hint"
+        const val RechargeAttach = "recharge.attach"
+        const val RechargeChange = "recharge.change"
+        const val RechargeNote = "recharge.note"
+        const val RechargeNoteHint = "recharge.note_hint"
+        const val RechargeSubmit = "recharge.submit"
+        const val RechargeNeedProof = "recharge.need_proof"
+        const val RechargeDone = "recharge.done"
+        const val RechargeNoRequests = "recharge.no_requests"
+        const val RechargeCredited = "recharge.credited"
+        const val RechargeYouGet = "recharge.you_get"
+        const val RechargeStep = "recharge.step"
+        const val SellerHubTitle = "seller.hub_title"
+        const val SellerDrawerHub = "seller.drawer_hub"
+        const val SellerDrawerList = "seller.drawer_list"
+        const val SellerTabOverview = "seller.tab_overview"
+        const val SellerTabSend = "seller.tab_send"
+        const val SellerTabRequests = "seller.tab_requests"
+        const val SellerTabHistory = "seller.tab_history"
+        const val SellerTabTeam = "seller.tab_team"
+        const val SellerBalance = "seller.balance"
+        const val SellerSentToday = "seller.sent_today"
+        const val SellerSentWeek = "seller.sent_week"
+        const val SellerSentMonth = "seller.sent_month"
+        const val SellerSentTotal = "seller.sent_total"
+        const val SellerToppedUp = "seller.topped_up"
+        const val SellerInactive = "seller.inactive"
+        const val SellerNoSendPerm = "seller.no_send_perm"
+        const val SellerFindUser = "seller.find_user"
+        const val SellerFindHint = "seller.find_hint"
+        const val SellerAmount = "seller.amount"
+        const val SellerAmountHint = "seller.amount_hint"
+        const val SellerNote = "seller.note"
+        const val SellerSendBtn = "seller.send_btn"
+        const val SellerSent = "seller.sent"
+        const val SellerTheyGet = "seller.they_get"
+        const val SellerLimits = "seller.limits"
+        const val SellerNoTransfers = "seller.no_transfers"
+        const val SellerNoTeam = "seller.no_team"
+        const val SellerNoRequests = "seller.no_requests"
+        const val SellerApprove = "seller.approve"
+        const val SellerReject = "seller.reject"
+        const val SellerViewProof = "seller.view_proof"
+        const val SellerListTitle = "seller.list_title"
+        const val SellerListEmpty = "seller.list_empty"
+        const val SellerListOff = "seller.list_off"
+        const val SellerTabSellers = "seller.tab_sellers"
+        const val SellerTabMyRequests = "seller.tab_my_requests"
+        const val SellerTabDisputes = "seller.tab_disputes"
+        const val SellerRequestBtn = "seller.request_btn"
+        const val SellerRequestTitle = "seller.request_title"
+        const val SellerRequestDone = "seller.request_done"
+        const val SellerContactWhatsapp = "seller.contact_whatsapp"
+        const val SellerAccountNo = "seller.account_no"
+        const val SellerSends = "seller.sends"
+        const val SellerProofOptional = "seller.proof_optional"
+        const val SellerDispute = "seller.dispute"
+        const val SellerDisputeReason = "seller.dispute_reason"
+        const val SellerDisputeOpenBtn = "seller.dispute_open"
+        const val SellerDisputeEmpty = "seller.dispute_empty"
+        const val SellerDisputeClosed = "seller.dispute_closed"
+        const val SellerDisputeReply = "seller.dispute_reply"
+        const val SellerDisputeSystem = "seller.dispute_system"
+        const val SellerDisputeAgainst = "seller.dispute_against"
+        const val SellerStatusPending = "seller.status_pending"
+        const val SellerStatusCompleted = "seller.status_completed"
+        const val SellerStatusDisputed = "seller.status_disputed"
+        const val SellerStatusFailed = "seller.status_failed"
+        const val SellerStatusApproved = "seller.status_approved"
+        const val SellerStatusRejected = "seller.status_rejected"
+        const val SellerStatusOpen = "seller.status_open"
+        const val SellerStatusResolved = "seller.status_resolved"
+        const val SellerStatusDismissed = "seller.status_dismissed"
+        const val TxnBy = "txn.by"
+        const val TxnWith = "txn.with"
         const val LiveSaySomething = "live.say_something"
         const val LiveLeaveTitle = "live.leave_title"
         const val LiveMinimize = "live.minimize"
         const val LiveMinimizeSub = "live.minimize_sub"
+        const val LiveShare = "live.share"
+        const val LiveShareSub = "live.share_sub"
+        const val LiveShareLinkCopied = "live.share_link_copied"
+        const val LiveShareLinkPending = "live.share_link_pending"
+        const val LiveShareBody = "live.share_body"
         const val LiveClose = "live.close"
         const val LiveCloseSub = "live.close_sub"
         const val LiveCancelStay = "live.cancel_stay"
+        const val LiveHostExitTitle = "live.host_exit_title"
+        const val LiveHostMinimizeSub = "live.host_minimize_sub"
+        const val LiveHostEnd = "live.host_end"
+        const val LiveHostEndSub = "live.host_end_sub"
+        const val LiveHostStay = "live.host_stay"
         const val LiveHostEnded = "live.host_ended"
         const val LiveConnectionLost = "live.connection_lost"
         const val LiveOk = "live.ok"
@@ -227,6 +376,102 @@ class Copy(private val lang: String) {
         const val LiveSummaryPeak = "live.summary_peak"
         const val LiveSummaryJoins = "live.summary_joins"
         const val LiveSummaryFailed = "live.summary_failed"
+        const val LiveSummaryVerified = "live.summary_verified"
+        const val LiveSummaryPaused = "live.summary_paused"
+        const val LiveSummaryToday = "live.summary_today"
+        const val LiveSummaryWall = "live.summary_wall"
+        const val LiveTimeNotCounting = "live.time_not_counting"
+        const val LiveTimeCountingNote = "live.time_counting_note"
+        const val LiveChannel = "live.channel"
+        const val LiveNotifHosting = "live.notif_hosting"
+        const val LiveNotifOnStage = "live.notif_on_stage"
+        const val LiveNotifCounted = "live.notif_counted"
+        const val LiveNotifPaused = "live.notif_paused"
+        const val MyLiveTitle = "mylive.title"
+        const val MyLiveToday = "mylive.today"
+        const val MyLiveLiveNow = "mylive.live_now"
+        const val MyLiveCounting = "mylive.counting"
+        const val MyLivePaused = "mylive.paused"
+        const val MyLiveWeek = "mylive.week"
+        const val MyLiveMonth = "mylive.month"
+        const val MyLiveLifetime = "mylive.lifetime"
+        const val MyLiveDays = "mylive.days"
+        const val MyLiveDaysEmpty = "mylive.days_empty"
+        const val MyLiveSessions = "mylive.sessions"
+        const val MyLiveSessionsEmpty = "mylive.sessions_empty"
+        const val MyLiveSessionsCount = "mylive.sessions_count"
+        const val MyLiveCohost = "mylive.cohost"
+        const val MyLiveAudio = "mylive.audio"
+        const val MyLiveDropsOnce = "mylive.drops_once"
+        const val MyLiveDrops = "mylive.drops"
+        const val MyLivePausedFor = "mylive.paused_for"
+        const val MyLiveDayNote = "mylive.day_note"
+        const val MyLiveEndedBy = "mylive.ended_by"
+        const val MyLiveReasonHost = "mylive.reason_host"
+        const val MyLiveReasonLost = "mylive.reason_lost"
+        const val MyLiveReasonAppClosed = "mylive.reason_app_closed"
+        const val MyLiveReasonMax = "mylive.reason_max"
+        const val MyLiveReasonStand = "mylive.reason_stand"
+        const val MyLiveReasonOther = "mylive.reason_other"
+        const val MyLiveLoadFailed = "mylive.load_failed"
+        const val MyLiveOlder = "mylive.older"
+        const val MyLiveRewards = "mylive.rewards"
+        const val RewardsTitle = "rewards.title"
+        const val RewardsToday = "rewards.today"
+        const val RewardsWeek = "rewards.week"
+        const val RewardsMonth = "rewards.month"
+        const val RewardsAll = "rewards.all"
+        const val RewardsLiveTime = "rewards.live_time"
+        const val RewardsAdded = "rewards.added"
+        const val RewardsPending = "rewards.pending"
+        const val RewardsClaimable = "rewards.claimable"
+        const val RewardsClaim = "rewards.claim"
+        const val RewardsClaimed = "rewards.claimed"
+        const val RewardsClaimWaiting = "rewards.claim_waiting"
+        const val RewardsClaimOpens = "rewards.claim_opens"
+        const val RewardsByDay = "rewards.by_day"
+        const val RewardsHistory = "rewards.history"
+        const val RewardsEmpty = "rewards.empty"
+        const val RewardsEmptyRange = "rewards.empty_range"
+        const val RewardsLoadFailed = "rewards.load_failed"
+        const val RewardsOlder = "rewards.older"
+        const val RewardsFilterAll = "rewards.filter_all"
+        const val RewardsStatusPending = "rewards.status_pending"
+        const val RewardsStatusAdded = "rewards.status_added"
+        const val RewardsStatusClaimable = "rewards.status_claimable"
+        const val RewardsStatusClaimed = "rewards.status_claimed"
+        const val RewardsStatusExpired = "rewards.status_expired"
+        const val RewardsStatusCancelled = "rewards.status_cancelled"
+        const val RewardsCompletedAt = "rewards.completed_at"
+        const val RewardsAddedAt = "rewards.added_at"
+        const val RewardsBalance = "rewards.balance"
+        const val RewardsRequired = "rewards.required"
+        const val RewardsVerified = "rewards.verified"
+        const val RewardsDay = "rewards.day"
+        const val RewardsRole = "rewards.role"
+        const val RewardsTimeline = "rewards.timeline"
+        const val RewardsDetail = "rewards.detail"
+        const val RewardsNoRewardsDay = "rewards.no_rewards_day"
+        const val RewardsDayNote = "rewards.day_note"
+        const val RewardsOff = "rewards.off"
+        const val RewardsEligible = "rewards.eligible"
+        const val RewardsEligibleNext = "rewards.eligible_next"
+        const val RewardsEligibleDone = "rewards.eligible_done"
+        const val RewardsNotEligible = "rewards.not_eligible"
+        const val RewardsNotEligibleRole = "rewards.not_eligible_role"
+        const val RewardsNotEligibleCondition = "rewards.not_eligible_condition"
+        const val RewardsNotEligibleNeed = "rewards.not_eligible_need"
+        const val RewardsNotEligibleLimit = "rewards.not_eligible_limit"
+        const val RewardsNotEligibleNone = "rewards.not_eligible_none"
+        const val RewardsNotEligibleTime = "rewards.not_eligible_time"
+        const val RewardsHudNext = "rewards.hud_next"
+        const val RewardsHudEarned = "rewards.hud_earned"
+        const val RewardsToastAdded = "rewards.toast_added"
+        const val RewardsToastClaimable = "rewards.toast_claimable"
+        const val RewardsToastPending = "rewards.toast_pending"
+        const val RewardsLevels = "rewards.levels"
+        const val RewardsConditions = "rewards.conditions"
+        const val RewardsPendingWhy = "rewards.pending_why"
         const val LiveNoneLive = "live.none_live"
         const val LiveNoneLiveSub = "live.none_live_sub"
         const val LiveWatching = "live.watching"
@@ -254,6 +499,14 @@ class Copy(private val lang: String) {
         const val LiveCoHostNone = "live.cohost_none"
         const val LiveRequestsOn = "live.requests_on"
         const val LiveRequestsOff = "live.requests_off"
+        const val LiveGuestCamOn = "live.guest_cam_on"
+        const val LiveGuestCamOff = "live.guest_cam_off"
+        const val LiveSentLike = "live.sent_like"
+        const val LiveEnteredRoom = "live.entered_room"
+        const val LiveLeftRoom = "live.left_room"
+        const val LiveGameWin = "live.game_win"
+        const val LiveGameWinGame = "live.game_win_game"
+        const val ProfileSending = "profile.sending"
         const val LiveStageRemove = "live.stage_remove"
         const val LiveStageLeave = "live.stage_leave"
         const val LiveStageDenied = "live.stage_denied"
@@ -279,6 +532,13 @@ class Copy(private val lang: String) {
         const val LiveMuteFor = "live.mute_for"
         const val LiveBlock = "live.block"
         const val LiveBlockFor = "live.block_for"
+        const val LiveBlockLive = "live.block_live"
+        const val LiveBlockedTitle = "live.blocked_title"
+        const val LiveBlockedNone = "live.blocked_none"
+        const val LiveBlockedTag = "live.blocked_tag"
+        const val LiveRemovedTag = "live.removed_tag"
+        const val LiveBanOver = "live.ban_over"
+        const val LiveUnblock = "live.unblock"
         const val LiveKick = "live.kick"
         const val LiveDays = "live.days"
         const val LiveMinutes = "live.minutes"
@@ -332,6 +592,7 @@ class Copy(private val lang: String) {
         const val PkWinTag = "pk.win_tag"
         const val PkLoseTag = "pk.lose_tag"
         const val PkConnecting = "pk.connecting"
+        const val PkHostLeft = "pk.host_left"
         const val LiveWatchEndedTitle = "live.watch_ended_title"
         const val LiveWatchEndedDuration = "live.watch_ended_duration"
         const val GamesTitle = "games.title"
@@ -387,6 +648,12 @@ class Copy(private val lang: String) {
         const val CreateGrid = "create.grid"
         const val CreateSpeed = "create.speed"
         const val CreateBeauty = "create.beauty"
+        const val CreateLooks = "create.looks"
+        const val CreateBackground = "create.background"
+        const val CreateMasks = "create.masks"
+        const val CreateEffects = "create.effects"
+        const val CreateLensOff = "create.lens_off"
+        const val CreateBgBlur = "create.bg_blur"
         const val CreateLiveVideoTitle = "create.live_video_title"
         const val CreateLiveAudioTitle = "create.live_audio_title"
         const val CreateLiveVideoSub = "create.live_video_sub"
@@ -451,6 +718,7 @@ class Copy(private val lang: String) {
         const val ProfileWhatsOnMind = "profile.whats_on_mind"
         const val ProfileStatusTitle = "profile.status_title"
         const val ProfileCopied = "profile.copied"
+        const val ProfileUserId = "profile.user_id"
         const val ProfileUsernameLocked = "profile.username_locked"
         const val ProfileUsernameAgainIn = "profile.username_again_in"
         const val ProfileUsernameAvailable = "profile.username_available"
@@ -509,6 +777,7 @@ class Copy(private val lang: String) {
         const val ProfileTerms = "profile.terms"
         const val ProfileLogOut = "profile.log_out"
         const val ProfileTopSenders = "profile.top_senders"
+        const val ProfileTopRecipients = "profile.top_recipients"
         const val ProfileGifts = "profile.gifts"
         const val ProfileDaily = "profile.daily"
         const val ProfileWeekly = "profile.weekly"
@@ -557,6 +826,39 @@ class Copy(private val lang: String) {
         const val BlockedChatsHint = "blocked.chats_hint"
         const val BlockedLiveHint = "blocked.live_hint"
         const val BlockedEmpty = "blocked.empty"
+        const val ModTitle = "mod.title"
+        const val ModSearchHint = "mod.search_hint"
+        const val ModSearchEmpty = "mod.search_empty"
+        const val ModCapture = "mod.capture"
+        const val ModCaptureOn = "mod.capture_on"
+        const val ModCaptureOff = "mod.capture_off"
+        const val ModCaptureAllow = "mod.capture_allow"
+        const val ModCaptureRevoke = "mod.capture_revoke"
+        const val ModCaptureInherit = "mod.capture_inherit"
+        const val ModMic = "mod.mic"
+        const val ModMicOn = "mod.mic_on"
+        const val ModMicOff = "mod.mic_off"
+        const val ModMicDisable = "mod.mic_disable"
+        const val ModMicEnable = "mod.mic_enable"
+        const val ModWarn = "mod.warn"
+        const val ModWarnSend = "mod.warn_send"
+        const val ModWarnSent = "mod.warn_sent"
+        const val ModReasonHint = "mod.reason_hint"
+        const val ModReasonRequired = "mod.reason_required"
+        const val ModBlock = "mod.block"
+        const val ModBlocked = "mod.blocked"
+        const val ModUnblock = "mod.unblock"
+        const val ModSaved = "mod.saved"
+        const val FindFriendsTitle = "ff.title"
+        const val FindFriendsSub = "ff.sub"
+        const val FindFriendsEnable = "ff.enable"
+        const val FindFriendsEnableHint = "ff.enable_hint"
+        const val FindFriendsSyncing = "ff.syncing"
+        const val FindFriendsPermission = "ff.permission"
+        const val FindFriendsOpenSettings = "ff.open_settings"
+        const val FindFriendsResults = "ff.results"
+        const val FindFriendsEmpty = "ff.empty"
+        const val FindFriendsPrivacy = "ff.privacy"
         const val RolesTitle = "roles.title"
         const val RolesTabMine = "roles.tab_mine"
         const val RolesTabRequests = "roles.tab_requests"
@@ -567,19 +869,30 @@ class Copy(private val lang: String) {
         const val RolesCodePlaceholder = "roles.code_placeholder"
         const val RolesCodeOwner = "roles.code_owner"
         const val RolesPickRole = "roles.pick_role"
+        const val RolesApplyingAs = "roles.applying_as"
         const val RolesNotePlaceholder = "roles.note_placeholder"
         const val RolesApply = "roles.apply"
         const val RolesApplied = "roles.applied"
         const val RolesMyCodes = "roles.my_codes"
         const val RolesCodeOpens = "roles.code_opens"
         const val RolesCopied = "roles.copied"
+        const val RolesCopyCode = "roles.copy_code"
         const val RolesShareCode = "roles.share_code"
+        const val RolesShareLink = "roles.share_link"
         const val RolesShareText = "roles.share_text"
+        const val RolesShareTextRole = "roles.share_text_role"
+        const val RolesShareTextRoleCode = "roles.share_text_role_code"
+        const val RolesSharePickRole = "roles.share_pick_role"
+        const val RolesShareNoRoles = "roles.share_no_roles"
+        const val RolesShareNoWeb = "roles.share_no_web"
+        const val RolesLinkCopied = "roles.link_copied"
         const val RolesFinance = "roles.finance"
         const val RolesGiftsReceived = "roles.gifts_received"
         const val RolesGiftsSent = "roles.gifts_sent"
         const val RolesReceivedLine = "roles.received_line"
         const val RolesSentLine = "roles.sent_line"
+        const val RolesRecharges = "roles.recharges"
+        const val RolesRechargeLine = "roles.recharge_line"
         const val RolesWithdrawals = "roles.withdrawals"
         const val RolesNoWithdrawals = "roles.no_withdrawals"
         const val RolesWdAmount = "roles.wd_amount"
@@ -587,6 +900,12 @@ class Copy(private val lang: String) {
         const val RolesWdApproved = "roles.wd_approved"
         const val RolesWdRejected = "roles.wd_rejected"
         const val RolesUpline = "roles.upline"
+        const val RolesLeaveUpline = "roles.leave_upline"
+        const val RolesLeaveUplineHint = "roles.leave_upline_hint"
+        const val RolesShiftUpline = "roles.shift_upline"
+        const val RolesShiftUplineHint = "roles.shift_upline_hint"
+        const val RolesShiftCodePlaceholder = "roles.shift_code_placeholder"
+        const val RolesShiftCodeRequired = "roles.shift_code_required"
         const val RolesTopOfTree = "roles.top_of_tree"
         const val RolesDownline = "roles.downline"
         const val RolesDirect = "roles.direct"
@@ -755,6 +1074,8 @@ class Copy(private val lang: String) {
         const val CallIncomingVideo = "call.incoming_video"
         const val CallAccept = "call.accept"
         const val CallDecline = "call.decline"
+        const val CallNotifyJoin = "call.notify_join"
+        const val CallNotifyEnd = "call.notify_end"
         const val CallBusy = "call.busy"
         const val CallNoAnswer = "call.no_answer"
         const val CallDeclined = "call.declined"
@@ -1008,6 +1329,18 @@ private val En = mapOf(
     Copy.StoreKindEntrance to "Entrance effects",
     Copy.StoreKindVip to "VIP",
     Copy.StoreKindBubbles to "Chat bubbles",
+    Copy.StoreFree to "Free",
+    Copy.StoreFreeSub to "Welcome packs, role packs and gifts from the team",
+    Copy.StoreTabAll to "All {name}",
+    Copy.StoreTabMine to "My {name}",
+    Copy.StoreNew to "New",
+    Copy.StoreOwned to "Owned",
+    Copy.StoreWearing to "Wearing now",
+    Copy.StoreParked to "Owned · not active",
+    Copy.StoreLapsed to "Expired",
+    Copy.StoreMineEmpty to "You don't have any {name} yet.",
+    Copy.StoreShopEmpty to "Nothing in {name} right now.",
+    Copy.StoreFreeEmpty to "Nothing free yet. Welcome packs land here.",
     Copy.LiveEntranceJoined to "{name} joined",
     Copy.LiveSendGift to "Send Gift",
     Copy.LiveGiftsTitle to "Gifts",
@@ -1018,6 +1351,9 @@ private val En = mapOf(
     Copy.LiveGiftNotEnough to "Not enough coins for this gift.",
     Copy.LiveGiftNotEnoughTitle to "Insufficient balance",
     Copy.LiveGiftNotEnoughBody to "{gift} costs {price} coins and you have {coins}. Recharge to keep the party going.",
+    Copy.LiveGiftNotEnoughMultiBody to "{gift} for {n} people needs {required} coins and you have {coins}. Recharge or pick fewer people.",
+    Copy.LiveGiftRecipients to "{n} people",
+    Copy.LiveGiftToOthers to "{to} +{n}",
     Copy.LiveGiftFailed to "Could not send the gift. Try again.",
     Copy.LiveGiftFailedTitle to "Gift not sent",
     Copy.LiveGiftDismiss to "Not now",
@@ -1030,6 +1366,30 @@ private val En = mapOf(
     Copy.LiveGiftHost to "Host",
     Copy.LiveGiftCombo to "Combo",
     Copy.LiveGiftLuckyHint to "Tap again to keep sending",
+    Copy.LiveGiftLocked to "Locked",
+    Copy.LiveGiftLockedTitle to "Not available right now",
+    Copy.GiftingTabProfile to "Profile",
+    Copy.GiftingTabGifting to "Gifting",
+    Copy.GiftingThisLive to "This LIVE",
+    Copy.GiftingToday to "Today",
+    Copy.GiftingWeek to "This week",
+    Copy.GiftingMonth to "This month",
+    Copy.GiftingDates to "Dates",
+    Copy.GiftingTopSenders to "Top senders",
+    Copy.GiftingTopReceivers to "Top receivers",
+    Copy.GiftingLatest to "Latest",
+    Copy.GiftingReceived to "Received",
+    Copy.GiftingSent to "Sent",
+    Copy.GiftingDiamonds to "diamonds",
+    Copy.GiftingCoins to "coins",
+    Copy.GiftingGiftsN to "{n} gifts",
+    Copy.GiftingEmpty to "No gifts in this period yet.",
+    Copy.GiftingPrivate to "This person's gifting is private.",
+    Copy.GiftingLoadFailed to "Could not load gifting.",
+    Copy.GiftingRetry to "Try again",
+    Copy.GiftingShow to "Show",
+    Copy.GiftingLive to "LIVE",
+    Copy.GiftingCashback to "+{n} back",
     Copy.LiveStickers to "Stickers",
     Copy.LiveStickerTo to "To",
     Copy.LiveStickerEveryone to "Everyone",
@@ -1068,6 +1428,7 @@ private val En = mapOf(
     Copy.ProfileNoSaved to "Nothing saved for later yet",
     Copy.ProfileNoPrivate to "No private posts",
     Copy.ProfileReceivingEmpty to "No gifts received in this period",
+    Copy.ProfileSendingEmpty to "No gifts sent in this period",
     Copy.TxnTitle to "Transaction history",
     Copy.TxnSpent to "Spent",
     Copy.TxnEarned to "Received",
@@ -1077,7 +1438,7 @@ private val En = mapOf(
     Copy.TxnCatStore to "Store purchases",
     Copy.TxnCatGameBets to "Game bets",
     Copy.TxnCatGiftsReceived to "Gifts received",
-    Copy.TxnCatTopups to "Top-ups",
+    Copy.TxnCatTopups to "Recharges",
     Copy.TxnCatGameWins to "Game wins",
     Copy.TxnCatWithdrawals to "Withdrawals",
     Copy.TxnCatAdjustments to "Adjustments",
@@ -1120,13 +1481,122 @@ private val En = mapOf(
     Copy.WithdrawNoRequests to "No withdrawal requests yet.",
     Copy.WithdrawCountry to "Country: {c}",
     Copy.WithdrawAll to "All",
+    Copy.BalanceTitle to "My balance",
+    Copy.BalanceCoins to "Coins",
+    Copy.BalanceDiamonds to "Diamonds",
+    Copy.BalanceBeans to "Beans",
+    Copy.BalanceRecharge to "Recharge",
+    Copy.BalanceWithdraw to "Withdraw",
+    Copy.BalanceHistory to "History",
+    Copy.BalancePending to "{n} recharge waiting for approval",
+    Copy.BalanceRecent to "Recent recharges",
+    Copy.RechargeTitle to "Recharge coins",
+    Copy.RechargeTabPackages to "Packages",
+    Copy.RechargeTabRequests to "My requests",
+    Copy.RechargePickPackage to "Choose how many coins to buy",
+    Copy.RechargeNoPackages to "No packages are available in your country yet.",
+    Copy.RechargePickMethod to "Choose where to send the payment",
+    Copy.RechargeNoMethods to "No payment methods are available in your country yet.",
+    Copy.RechargeBonus to "+{n} bonus",
+    Copy.RechargeSendExactly to "Send exactly",
+    Copy.RechargeAccountTitle to "Account title",
+    Copy.RechargeAccountNo to "Account number",
+    Copy.RechargeCopy to "Copy",
+    Copy.RechargeCopied to "Copied",
+    Copy.RechargeInstructions to "Instructions",
+    Copy.RechargeProof to "Payment screenshot",
+    Copy.RechargeProofHint to "After paying, attach the receipt or confirmation screenshot so we can verify it.",
+    Copy.RechargeAttach to "Attach screenshot",
+    Copy.RechargeChange to "Change",
+    Copy.RechargeNote to "Message (optional)",
+    Copy.RechargeNoteHint to "Transaction ID, sender name, anything that helps us match your payment",
+    Copy.RechargeSubmit to "Submit for approval",
+    Copy.RechargeNeedProof to "Attach your payment screenshot first.",
+    Copy.RechargeDone to "Submitted. Your coins will be added once the payment is confirmed.",
+    Copy.RechargeNoRequests to "No recharge requests yet.",
+    Copy.RechargeCredited to "{n} coins credited",
+    Copy.RechargeYouGet to "You get",
+    Copy.RechargeStep to "Step {n} of 3",
+    Copy.SellerHubTitle to "Coin seller",
+    Copy.SellerDrawerHub to "Coin seller",
+    Copy.SellerDrawerList to "Buy from a seller",
+    Copy.SellerTabOverview to "Overview",
+    Copy.SellerTabSend to "Send",
+    Copy.SellerTabRequests to "Requests",
+    Copy.SellerTabHistory to "History",
+    Copy.SellerTabTeam to "Team",
+    Copy.SellerBalance to "Your balance",
+    Copy.SellerSentToday to "Today",
+    Copy.SellerSentWeek to "This week",
+    Copy.SellerSentMonth to "This month",
+    Copy.SellerSentTotal to "All time",
+    Copy.SellerToppedUp to "Received from platform",
+    Copy.SellerInactive to "Your seller account is inactive. Contact support for details.",
+    Copy.SellerNoSendPerm to "Sending is not enabled for your account yet.",
+    Copy.SellerFindUser to "Find the receiver",
+    Copy.SellerFindHint to "User id or username",
+    Copy.SellerAmount to "Amount",
+    Copy.SellerAmountHint to "How much to send",
+    Copy.SellerNote to "Note (optional)",
+    Copy.SellerSendBtn to "Send {n}",
+    Copy.SellerSent to "Sent. New balance: {n}",
+    Copy.SellerTheyGet to "They receive {n} {cur}",
+    Copy.SellerLimits to "Per send: {min} – {max}",
+    Copy.SellerNoTransfers to "No sends yet.",
+    Copy.SellerNoTeam to "No team members yet.",
+    Copy.SellerNoRequests to "No requests yet.",
+    Copy.SellerApprove to "Approve & send",
+    Copy.SellerReject to "Decline",
+    Copy.SellerViewProof to "View payment screenshot",
+    Copy.SellerListTitle to "Coin sellers",
+    Copy.SellerListEmpty to "No sellers are available right now.",
+    Copy.SellerListOff to "Coin sellers are not enabled.",
+    Copy.SellerTabSellers to "Sellers",
+    Copy.SellerTabMyRequests to "My requests",
+    Copy.SellerTabDisputes to "Disputes",
+    Copy.SellerRequestBtn to "Request recharge",
+    Copy.SellerRequestTitle to "Request from @{name}",
+    Copy.SellerRequestDone to "Request sent. The seller will review it.",
+    Copy.SellerContactWhatsapp to "WhatsApp",
+    Copy.SellerAccountNo to "Account",
+    Copy.SellerSends to "{n} sends",
+    Copy.SellerProofOptional to "Payment screenshot (optional)",
+    Copy.SellerDispute to "Report a problem",
+    Copy.SellerDisputeReason to "Describe the problem",
+    Copy.SellerDisputeOpenBtn to "Open dispute",
+    Copy.SellerDisputeEmpty to "No disputes.",
+    Copy.SellerDisputeClosed to "This dispute is closed.",
+    Copy.SellerDisputeReply to "Write a message…",
+    Copy.SellerDisputeSystem to "System",
+    Copy.SellerDisputeAgainst to "Against @{name}",
+    Copy.SellerStatusPending to "Pending",
+    Copy.SellerStatusCompleted to "Completed",
+    Copy.SellerStatusDisputed to "Disputed",
+    Copy.SellerStatusFailed to "Failed",
+    Copy.SellerStatusApproved to "Approved",
+    Copy.SellerStatusRejected to "Rejected",
+    Copy.SellerStatusOpen to "Open",
+    Copy.SellerStatusDismissed to "Dismissed",
+    Copy.SellerStatusResolved to "Resolved",
+    Copy.TxnBy to "by {name}",
+    Copy.TxnWith to "with {name}",
     Copy.LiveSaySomething to "Say something…",
     Copy.LiveLeaveTitle to "Leave this broadcast?",
     Copy.LiveMinimize to "Minimize",
     Copy.LiveMinimizeSub to "Keep watching in mini player",
+    Copy.LiveShare to "Share",
+    Copy.LiveShareSub to "Copy or send the live link",
+    Copy.LiveShareLinkCopied to "Live link copied",
+    Copy.LiveShareLinkPending to "Link isn’t ready yet. Try again in a moment.",
+    Copy.LiveShareBody to "Watch me live on {app}",
     Copy.LiveClose to "Close",
     Copy.LiveCloseSub to "Leave this stream",
     Copy.LiveCancelStay to "Cancel, stay in stream",
+    Copy.LiveHostExitTitle to "End your LIVE?",
+    Copy.LiveHostMinimizeSub to "Stay live while you use the app",
+    Copy.LiveHostEnd to "End LIVE",
+    Copy.LiveHostEndSub to "Close the room for everyone",
+    Copy.LiveHostStay to "Cancel, keep broadcasting",
     Copy.LiveHostEnded to "The host has ended this live",
     Copy.LiveConnectionLost to "Your connection dropped and the live could not be rejoined",
     Copy.LiveOk to "OK",
@@ -1136,6 +1606,102 @@ private val En = mapOf(
     Copy.LiveSummaryPeak to "Peak viewers",
     Copy.LiveSummaryJoins to "Joins",
     Copy.LiveSummaryFailed to "Couldn't start the live. Check your connection and try again.",
+    Copy.LiveSummaryVerified to "Time counted",
+    Copy.LiveSummaryPaused to "{t} not counted while you were offline",
+    Copy.LiveSummaryToday to "Today so far: {t}",
+    Copy.LiveSummaryWall to "On air {t}",
+    Copy.LiveTimeNotCounting to "Not counting — reconnecting",
+    Copy.LiveTimeCountingNote to "counted",
+    Copy.LiveChannel to "Live",
+    Copy.LiveNotifHosting to "You're live",
+    Copy.LiveNotifOnStage to "You're on stage",
+    Copy.LiveNotifCounted to "{t} counted",
+    Copy.LiveNotifPaused to "Time paused — reconnecting",
+    Copy.MyLiveTitle to "My Live",
+    Copy.MyLiveToday to "Today",
+    Copy.MyLiveLiveNow to "Live now",
+    Copy.MyLiveCounting to "Counting",
+    Copy.MyLivePaused to "Paused — reconnecting",
+    Copy.MyLiveWeek to "This week",
+    Copy.MyLiveMonth to "This month",
+    Copy.MyLiveLifetime to "All time",
+    Copy.MyLiveDays to "By day",
+    Copy.MyLiveDaysEmpty to "No live time in this period yet.",
+    Copy.MyLiveSessions to "Sessions",
+    Copy.MyLiveSessionsEmpty to "You did not go live this day.",
+    Copy.MyLiveSessionsCount to "{n} sessions",
+    Copy.MyLiveCohost to "Co-host",
+    Copy.MyLiveAudio to "Audio",
+    Copy.MyLiveDropsOnce to "1 reconnect",
+    Copy.MyLiveDrops to "{n} reconnects",
+    Copy.MyLivePausedFor to "{t} offline, not counted",
+    Copy.MyLiveDayNote to "Days run from {start} in {tz}. Only time your phone was connected is counted; the record is the same one support sees.",
+    Copy.MyLiveEndedBy to "Ended: {r}",
+    Copy.MyLiveReasonHost to "you ended it",
+    Copy.MyLiveReasonLost to "connection lost",
+    Copy.MyLiveReasonAppClosed to "app closed",
+    Copy.MyLiveReasonMax to "maximum length",
+    Copy.MyLiveReasonStand to "left the stage",
+    Copy.MyLiveReasonOther to "{r}",
+    Copy.MyLiveLoadFailed to "Couldn't load your live time.",
+    Copy.MyLiveOlder to "Earlier days",
+    Copy.MyLiveRewards to "Rewards",
+    Copy.RewardsTitle to "My Rewards",
+    Copy.RewardsToday to "Today",
+    Copy.RewardsWeek to "Week",
+    Copy.RewardsMonth to "Month",
+    Copy.RewardsAll to "All",
+    Copy.RewardsLiveTime to "Live time",
+    Copy.RewardsAdded to "Added to balance",
+    Copy.RewardsPending to "Pending",
+    Copy.RewardsClaimable to "Ready to claim",
+    Copy.RewardsClaim to "Claim {amt}",
+    Copy.RewardsClaimed to "{amt} added to your balance",
+    Copy.RewardsClaimWaiting to "{amt} waiting for its claim window",
+    Copy.RewardsClaimOpens to "opens {t}",
+    Copy.RewardsByDay to "By day",
+    Copy.RewardsHistory to "History",
+    Copy.RewardsEmpty to "No rewards yet. Go live and your time on air earns them.",
+    Copy.RewardsEmptyRange to "No rewards in this period.",
+    Copy.RewardsLoadFailed to "Couldn't load your rewards.",
+    Copy.RewardsOlder to "Earlier rewards",
+    Copy.RewardsFilterAll to "All",
+    Copy.RewardsStatusPending to "Pending",
+    Copy.RewardsStatusAdded to "Added",
+    Copy.RewardsStatusClaimable to "Claimable",
+    Copy.RewardsStatusClaimed to "Claimed",
+    Copy.RewardsStatusExpired to "Expired",
+    Copy.RewardsStatusCancelled to "Cancelled",
+    Copy.RewardsCompletedAt to "Completed at",
+    Copy.RewardsAddedAt to "Added at",
+    Copy.RewardsBalance to "Balance",
+    Copy.RewardsRequired to "Required",
+    Copy.RewardsVerified to "Verified",
+    Copy.RewardsDay to "Reward day",
+    Copy.RewardsRole to "As",
+    Copy.RewardsTimeline to "Timeline",
+    Copy.RewardsDetail to "Reward",
+    Copy.RewardsNoRewardsDay to "Live time, no reward reached",
+    Copy.RewardsDayNote to "Reward days run from {start} in {tz}, the same calendar as your live time. Times shown are in {tz}.",
+    Copy.RewardsOff to "Live rewards are paused right now.",
+    Copy.RewardsEligible to "Eligible for rewards",
+    Copy.RewardsEligibleNext to "{amt} after {t} live",
+    Copy.RewardsEligibleDone to "Today's rewards all earned",
+    Copy.RewardsNotEligible to "Not eligible for rewards",
+    Copy.RewardsNotEligibleRole to "Your role isn't included in this campaign",
+    Copy.RewardsNotEligibleCondition to "A campaign condition isn't met yet",
+    Copy.RewardsNotEligibleNeed to "Need {which}",
+    Copy.RewardsNotEligibleLimit to "Reward limit reached for this period",
+    Copy.RewardsNotEligibleNone to "No reward campaign is running",
+    Copy.RewardsNotEligibleTime to "{t} more live time",
+    Copy.RewardsHudNext to "{amt} in {t}",
+    Copy.RewardsHudEarned to "{amt} earned",
+    Copy.RewardsToastAdded to "+{amt} added · {b} → {a}",
+    Copy.RewardsToastClaimable to "+{amt} ready to claim",
+    Copy.RewardsToastPending to "{amt} reached · checking",
+    Copy.RewardsLevels to "Levels",
+    Copy.RewardsConditions to "Conditions",
+    Copy.RewardsPendingWhy to "Reached {t}, waiting: {r}",
     Copy.LiveNoneLive to "Nobody is live right now",
     Copy.LiveNoneLiveSub to "Go live and you'll show up here instantly.",
     Copy.LiveWatching to "{n} watching",
@@ -1163,6 +1729,14 @@ private val En = mapOf(
     Copy.LiveCoHostNone to "No co-hosts yet",
     Copy.LiveRequestsOn to "Co-host requests on",
     Copy.LiveRequestsOff to "Co-host requests off",
+    Copy.LiveGuestCamOn to "Co-host cameras allowed",
+    Copy.LiveGuestCamOff to "Allow co-host cameras",
+    Copy.LiveSentLike to "liked the LIVE ❤️",
+    Copy.LiveEnteredRoom to "has entered the room 👋",
+    Copy.LiveLeftRoom to "has left the room",
+    Copy.LiveGameWin to "won {amount} in {game} 🎉",
+    Copy.LiveGameWinGame to "a game",
+    Copy.ProfileSending to "Sending",
     Copy.LiveStageRemove to "Remove",
     Copy.LiveStageLeave to "Leave stage",
     Copy.LiveStageDenied to "The host declined your request.",
@@ -1188,6 +1762,13 @@ private val En = mapOf(
     Copy.LiveMuteFor to "Mute chat for",
     Copy.LiveBlock to "Block from room",
     Copy.LiveBlockFor to "Block from joining for",
+    Copy.LiveBlockLive to "Block for this live",
+    Copy.LiveBlockedTitle to "Blocked this live",
+    Copy.LiveBlockedNone to "No one has been blocked or removed in this live",
+    Copy.LiveBlockedTag to "Blocked for this live",
+    Copy.LiveRemovedTag to "Removed",
+    Copy.LiveBanOver to "ended",
+    Copy.LiveUnblock to "Unblock",
     Copy.LiveKick to "Kick",
     Copy.LiveDays to "{n} days",
     Copy.LiveMinutes to "{n} min",
@@ -1241,6 +1822,7 @@ private val En = mapOf(
     Copy.PkWinTag to "WIN",
     Copy.PkLoseTag to "LOSE",
     Copy.PkConnecting to "Connecting…",
+    Copy.PkHostLeft to "Left the PK",
     Copy.LiveWatchEndedTitle to "This live has ended",
     Copy.LiveWatchEndedDuration to "Was live for",
     Copy.GamesTitle to "Games",
@@ -1278,7 +1860,7 @@ private val En = mapOf(
     Copy.CreateAudioOnly to "Audio",
     Copy.CreateRoomSize to "Room size",
     Copy.CreateSeats to "Custom number of seats",
-    Copy.CreateSeatsHint to "Enter number (max 35)",
+    Copy.CreateSeatsHint to "Enter number (max 45)",
     Copy.CreateSeatLayout to "Seat layout",
     Copy.CreateOrderSeats to "Order seats",
     Copy.CreateOrderSeatsHint to "Drag a seat into a slot. Empty slots stay open.",
@@ -1296,6 +1878,12 @@ private val En = mapOf(
     Copy.CreateGrid to "Grid",
     Copy.CreateSpeed to "Speed",
     Copy.CreateBeauty to "Beauty",
+    Copy.CreateLooks to "Looks",
+    Copy.CreateBackground to "Background",
+    Copy.CreateMasks to "Masks",
+    Copy.CreateEffects to "Effects",
+    Copy.CreateLensOff to "Off",
+    Copy.CreateBgBlur to "Blur",
     Copy.CreateLiveVideoTitle to "Start a Video Live",
     Copy.CreateLiveAudioTitle to "Start an Audio Room",
     Copy.CreateLiveVideoSub to "You'll be visible on camera.",
@@ -1308,7 +1896,7 @@ private val En = mapOf(
     Copy.CreateLiveTitleHint to "What's your live about?",
     Copy.CreateSpeakerSeats to "Speaker Seats",
     Copy.CreateCustom to "Custom",
-    Copy.CreateSeatsMax to "max 35",
+    Copy.CreateSeatsMax to "max 45",
     Copy.CreateAudience to "Audience",
     Copy.CreateAudiencePublic to "Public",
     Copy.CreateAudienceFriends to "Friends",
@@ -1360,7 +1948,8 @@ private val En = mapOf(
     Copy.ProfileWhatsOnMind to "What's on your mind?",
     Copy.ProfileStatusTitle to "Status",
     Copy.ProfileCopied to "Copied to clipboard",
-    Copy.ProfileUsernameLocked to "Username can be changed once every 30 days",
+    Copy.ProfileUserId to "ID {n}",
+    Copy.ProfileUsernameLocked to "Username can be changed once every {n} days",
     Copy.ProfileUsernameAgainIn to "You can change your username again in {n} days",
     Copy.ProfileUsernameAvailable to "@{u} is available",
     Copy.ProfileUsernameTaken to "@{u} is already taken",
@@ -1418,6 +2007,7 @@ private val En = mapOf(
     Copy.ProfileTerms to "Terms & Policies",
     Copy.ProfileLogOut to "Log Out",
     Copy.ProfileTopSenders to "Top Senders",
+    Copy.ProfileTopRecipients to "Top Recipients",
     Copy.ProfileGifts to "Gifts",
     Copy.ProfileDaily to "Daily",
     Copy.ProfileWeekly to "Weekly",
@@ -1466,6 +2056,39 @@ private val En = mapOf(
     Copy.BlockedChatsHint to "You can't message or call each other.",
     Copy.BlockedLiveHint to "They can't join your live broadcasts.",
     Copy.BlockedEmpty to "No blocked accounts",
+    Copy.ModTitle to "Moderation",
+    Copy.FindFriendsTitle to "Find friends",
+    Copy.FindFriendsSub to "Find people you know who are already here.",
+    Copy.FindFriendsEnable to "Find friends from contacts",
+    Copy.FindFriendsEnableHint to "You will be given suggestions for matching accounts.",
+    Copy.FindFriendsSyncing to "You will be given suggestions for matching accounts.",
+    Copy.FindFriendsPermission to "Allow contacts access so we can find people you know.",
+    Copy.FindFriendsOpenSettings to "Open settings",
+    Copy.FindFriendsResults to "People you may know",
+    Copy.FindFriendsEmpty to "You will be given suggestions for matching accounts.",
+    Copy.FindFriendsPrivacy to "You can turn this off anytime. Your synced data stays so suggestions can still work later.",
+    Copy.ModSearchHint to "Search id, username or name",
+    Copy.ModSearchEmpty to "No accounts match that.",
+    Copy.ModCapture to "Screen capture",
+    Copy.ModCaptureOn to "Capture allowed",
+    Copy.ModCaptureOff to "Capture blocked",
+    Copy.ModCaptureAllow to "Allow",
+    Copy.ModCaptureRevoke to "Revoke",
+    Copy.ModCaptureInherit to "Role decides",
+    Copy.ModMic to "Microphone",
+    Copy.ModMicOn to "Mic enabled",
+    Copy.ModMicOff to "Mic disabled",
+    Copy.ModMicDisable to "Disable mic",
+    Copy.ModMicEnable to "Enable mic",
+    Copy.ModWarn to "Warning",
+    Copy.ModWarnSend to "Send warning",
+    Copy.ModWarnSent to "Warning sent.",
+    Copy.ModReasonHint to "Reason",
+    Copy.ModReasonRequired to "Say why first.",
+    Copy.ModBlock to "Block account",
+    Copy.ModBlocked to "Account blocked",
+    Copy.ModUnblock to "Unblock",
+    Copy.ModSaved to "Saved.",
     Copy.RolesTitle to "My roles",
     Copy.RolesTabMine to "Roles",
     Copy.RolesTabRequests to "Requests",
@@ -1476,19 +2099,30 @@ private val En = mapOf(
     Copy.RolesCodePlaceholder to "Referral code",
     Copy.RolesCodeOwner to "Code from {name} ({role})",
     Copy.RolesPickRole to "Apply as",
+    Copy.RolesApplyingAs to "Applying as {role}",
     Copy.RolesNotePlaceholder to "Note to your upline (optional)",
     Copy.RolesApply to "Apply",
     Copy.RolesApplied to "Application sent. You'll be notified once it's reviewed.",
     Copy.RolesMyCodes to "My referral codes",
     Copy.RolesCodeOpens to "Onboards: {roles}",
     Copy.RolesCopied to "Code copied",
+    Copy.RolesCopyCode to "Copy code",
     Copy.RolesShareCode to "Share",
+    Copy.RolesShareLink to "Share link",
     Copy.RolesShareText to "Use my referral code {code} to join: {link}",
+    Copy.RolesShareTextRole to "Apply as {role} with my code {code}: {link}",
+    Copy.RolesShareTextRoleCode to "Apply as {role} with my referral code {code}",
+    Copy.RolesSharePickRole to "Which role is this invite for?",
+    Copy.RolesShareNoRoles to "This code has no roles to share yet.",
+    Copy.RolesShareNoWeb to "Set Website URL in Settings → Branding so invite links can be shared.",
+    Copy.RolesLinkCopied to "Link copied",
     Copy.RolesFinance to "Gifts & earnings",
     Copy.RolesGiftsReceived to "Received",
     Copy.RolesGiftsSent to "Sent",
     Copy.RolesReceivedLine to "{coins} coins · {diamonds} diamonds · {n} gifts",
     Copy.RolesSentLine to "{coins} coins · {n} gifts",
+    Copy.RolesRecharges to "Recharges",
+    Copy.RolesRechargeLine to "{coins} coins credited · {n} approved",
     Copy.RolesWithdrawals to "Withdrawal requests",
     Copy.RolesNoWithdrawals to "No withdrawal requests yet.",
     Copy.RolesWdAmount to "{n} diamonds",
@@ -1509,6 +2143,12 @@ private val En = mapOf(
     Copy.RolesCancel to "Cancel request",
     Copy.RolesReasonPlaceholder to "Reason (shown to the person)",
     Copy.RolesReasonRequired to "Add a short reason.",
+    Copy.RolesLeaveUpline to "Leave upline",
+    Copy.RolesLeaveUplineHint to "You keep your role and your team — only the link to your upline is removed. Your upline will be informed with your reason.",
+    Copy.RolesShiftUpline to "Change upline",
+    Copy.RolesShiftUplineHint to "Enter your new upline's referral code. The move happens only after they approve your request.",
+    Copy.RolesShiftCodePlaceholder to "New upline's referral code",
+    Copy.RolesShiftCodeRequired to "Enter the new upline's referral code.",
     Copy.RolesDecided to "Decided by {name}",
     Copy.RolesRequestedBy to "Requested by {name}",
     Copy.RolesWaiting to "Waiting for approval",
@@ -1578,7 +2218,7 @@ private val En = mapOf(
     Copy.RolesActions to "Actions",
     Copy.ProfileSupportLegal to "Support & Legal",
     Copy.ProfileLocationContacts to "Location & Contacts",
-    Copy.ProfileVersion to "{app} v1.0.0",
+    Copy.ProfileVersion to "{app} v{version}",
     Copy.FeatureUnavailable to "This section is temporarily unavailable.",
     Copy.InboxChatOpenFail to "Couldn't open this chat. Please try again.",
     Copy.InboxOk to "OK",
@@ -1633,6 +2273,8 @@ private val En = mapOf(
     Copy.CallIncomingVideo to "Incoming video call",
     Copy.CallAccept to "Accept",
     Copy.CallDecline to "Decline",
+    Copy.CallNotifyJoin to "Join",
+    Copy.CallNotifyEnd to "End",
     Copy.CallBusy to "Busy",
     Copy.CallNoAnswer to "No answer",
     Copy.CallDeclined to "Call declined",

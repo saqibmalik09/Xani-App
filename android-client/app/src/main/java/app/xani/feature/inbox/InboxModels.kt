@@ -5,7 +5,33 @@ import androidx.compose.ui.graphics.Color
 
 enum class InboxLane { Chats, Notifications, Activity }
 
-enum class MsgKind { Text, Image, Video, Voice, Contact, Location, Document, Poll, Event, Ai }
+enum class MsgKind { Text, Image, Video, Voice, Contact, Location, Document, Poll, Event, Ai, System }
+
+/** Parsed `#call` system body from the identity call service. */
+data class CallMsg(
+    val video: Boolean,
+    val status: String,
+    val durationSec: Int,
+    val callId: Long,
+)
+
+fun parseCallMsg(text: String): CallMsg? {
+    val lines = text.lineSequence().toList()
+    if (lines.isEmpty() || lines[0].trim() != "#call") return null
+    return CallMsg(
+        video = lines.getOrNull(1)?.trim() == "video",
+        status = lines.getOrNull(2)?.trim().orEmpty().ifBlank { "ended" },
+        durationSec = lines.getOrNull(3)?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+        callId = lines.getOrNull(4)?.trim()?.toLongOrNull() ?: 0L,
+    )
+}
+
+fun formatCallClock(sec: Int): String {
+    val s = sec.coerceAtLeast(0)
+    val m = s / 60
+    val r = s % 60
+    return "%d:%02d".format(m, r)
+}
 
 enum class Delivery { Sending, Sent, Delivered, Seen }
 

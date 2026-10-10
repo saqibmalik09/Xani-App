@@ -12,6 +12,9 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
+import android.util.Range
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -63,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,8 +87,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import app.xani.core.device.DeviceClass
 import app.xani.core.isolate.runFeature
+import app.xani.core.lens.LensCaps
+import app.xani.core.lens.LensController
+import app.xani.core.lens.LensEngine
 import app.xani.core.media.ImageLoader
+import app.xani.core.net.ContactSync
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
 import app.xani.ui.components.pressable
@@ -472,47 +481,67 @@ fun CameraPreview(
     enabled: Boolean = true,
     fallback: Color = Color(0xFF1A1A1A),
     holder: TextureHolder? = null,
+    /** Xani Lens effects for this viewfinder; null previews the sensor directly. */
+    lens: LensController? = null,
 ) {
     val context = LocalContext.current
     val session = remember { Camera2Session() }
-    DisposableEffect(enabled, front) {
+    // Keyed on nothing on purpose. Compose runs a node's update block before it
+    // disposes effects whose keys changed, so keying this on front/lens closed
+    // the session that `update` had just reopened and left the viewfinder black
+    // for good. A camera/lens switch is re-keyed inside open() instead.
+    DisposableEffect(Unit) {
         onDispose {
             if (holder != null && holder.camera === session) holder.camera = null
             session.close()
         }
     }
     if (!enabled) {
+        // Free the sensor while the viewfinder is off. Entering this branch is
+        // the signal, not an effect key, so it cannot race the reopen when the
+        // viewfinder comes back.
+        DisposableEffect(Unit) {
+            session.close()
+            onDispose {}
+        }
         Box(modifier.background(fallback))
         return
     }
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            TextureView(ctx).apply {
-                holder?.view = this
-                holder?.camera = session
-                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                        session.open(context, this@apply, front)
-                        if (w < 32 || h < 32) post { session.open(context, this@apply, front) }
+    // A flip gets its own TextureView. Handing the next camera a SurfaceTexture
+    // whose previous producer — the old camera or the old EGL window — has not
+    // let go yet is refused silently, and the view then sits on the last frame
+    // it was given: the "switch sticks" freeze. Tearing the view down with the
+    // camera guarantees the new one starts on a texture nobody owns.
+    key(front) {
+        AndroidView(
+            modifier = modifier,
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    holder?.view = this
+                    holder?.camera = session
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            session.open(context, this@apply, front, lens)
+                            if (w < 32 || h < 32) post { session.open(context, this@apply, front, lens) }
+                        }
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                            session.open(context, this@apply, front, lens)
+                        }
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            session.close()
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
                     }
-                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                        session.open(context, this@apply, front)
-                    }
-                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                        session.close()
-                        return true
-                    }
-                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
                 }
-            }
-        },
-        update = { view ->
-            holder?.view = view
-            holder?.camera = session
-            if (enabled && view.isAvailable) session.open(context, view, front)
-        },
-    )
+            },
+            update = { view ->
+                holder?.view = view
+                holder?.camera = session
+                if (enabled && view.isAvailable) session.open(context, view, front, lens)
+            },
+        )
+    }
 }
 
 private class Camera2Session : VideoRecorder {
@@ -533,6 +562,27 @@ private class Camera2Session : VideoRecorder {
     private var sensorOrientation = 90
     private var videoSize = Size(1280, 720)
 
+    // Tuning picked from the device's own capabilities at open(). Applying a
+    // mode the HAL does not list can throw on some chips, so each is vetted.
+    private var afMode: Int? = null
+    private var aeFpsRange: Range<Int>? = null
+    private var ois = false
+    private var noiseHq = false
+    private var noiseFast = false
+
+    // Xani Lens: camera renders into the engine's input; the engine paints the
+    // TextureView (and the encoder). Null = raw sensor, identity blit skipped.
+    private var lensEngine: LensEngine? = null
+
+    // Bumped on every open()/close(). Camera2 cannot cancel an in-flight
+    // openCamera; with the lens engine in the path the open is slow enough
+    // that the composable can close this session (live room handed the sensor
+    // to the encoder) before onOpened lands. A stale onOpened must release
+    // the device immediately — keeping it evicts the encoder's capturer and
+    // the broadcast goes black while the two clients fight over the sensor.
+    @Volatile
+    private var generation = 0
+
     @Volatile
     private var recorder: MediaRecorder? = null
 
@@ -540,16 +590,30 @@ private class Camera2Session : VideoRecorder {
     override var recording: Boolean = false
         private set
 
-    fun open(context: Context, view: TextureView, front: Boolean) {
+    /** Set by the first completed capture; the black-viewfinder watchdog reads it. */
+    @Volatile
+    private var framed = false
+
+    fun open(context: Context, view: TextureView, front: Boolean, lens: LensController? = null) {
         val mgr = context.getSystemService(CameraManager::class.java) ?: return
         val id = pick(mgr, front) ?: return
         val vw = view.width.coerceAtLeast(1)
         val vh = view.height.coerceAtLeast(1)
-        if (vw < 32 || vh < 32) return
+        if (vw < 32 || vh < 32) {
+            android.util.Log.i("XaniCam", "open skipped: view ${vw}x$vh not laid out")
+            return
+        }
         val size = chooseSize(mgr, id, vw, vh)
         val rot = view.display?.rotation ?: Surface.ROTATION_0
-        val key = "$id-${size.width}x${size.height}-$front-$rot"
+        val key = "$id-${size.width}x${size.height}-$front-$rot-${if (lens != null) "L" else "R"}"
         if (openedKey == key && device != null) {
+            relayout(view)
+            return
+        }
+        if (recording && device != null) {
+            // A clip is being written: reconfiguring the sensor would finalise it
+            // mid-shot. The new camera or filter applies to the next take.
+            android.util.Log.i("XaniCam", "open deferred: recording")
             relayout(view)
             return
         }
@@ -563,41 +627,205 @@ private class Camera2Session : VideoRecorder {
         sensorOrientation = runFeature(90) {
             mgr.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         }
+        runFeature(Unit) {
+            val chars = mgr.getCameraCharacteristics(id)
+            val afModes = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            afMode = when {
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in afModes -> CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE in afModes -> CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                CameraMetadata.CONTROL_AF_MODE_AUTO in afModes -> CameraMetadata.CONTROL_AF_MODE_AUTO
+                else -> null
+            }
+            // Fastest range the sensor lists, and AE may halve it in the dark
+            // but no further: a range like 10..24 lets the HAL run the
+            // viewfinder at 10 fps in ordinary indoor light, which reads as lag.
+            aeFpsRange = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.filter { it.upper >= 24 }
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { ranges ->
+                    val top = ranges.maxOf { it.upper }
+                    val fast = ranges.filter { it.upper == top }
+                    fast.filter { it.lower * 2 >= top }.minByOrNull { it.lower }
+                        ?: fast.maxByOrNull { it.lower }
+                }
+            ois = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                ?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+            val nr = chars.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+            noiseHq = nr?.contains(CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY) == true
+            noiseFast = nr?.contains(CameraMetadata.NOISE_REDUCTION_MODE_FAST) == true
+        }
         videoSize = chooseVideoSize(mgr, id, size)
         val ht = HandlerThread("chat-cam").also { it.start() }
         thread = ht
         val h = Handler(ht.looper)
         handler = h
-        val texture = view.surfaceTexture ?: return
-        texture.setDefaultBufferSize(size.width, size.height)
-        view.setTransform(fillCenter(vw, vh, size.width, size.height, rot, front))
-        val surface = Surface(texture)
-        previewSurface = surface
+        val texture = view.surfaceTexture
+        if (texture == null) {
+            android.util.Log.i("XaniCam", "open skipped: no surface texture yet")
+            return
+        }
+        val camSurface = bindPreview(context, view, texture, size, vw, vh, rot, lens) ?: return
+        previewSurface = camSurface
+        android.util.Log.i(
+            "XaniCam",
+            "open id=$id front=$front view=${vw}x$vh buf=${size.width}x${size.height} " +
+                "sensor=$sensorOrientation rot=$rot video=$videoSize lens=${lensEngine != null} " +
+                "af=$afMode fps=$aeFpsRange ois=$ois",
+        )
+        val gen = generation
         runFeature(Unit) {
             mgr.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    if (gen != generation) {
+                        // This session was closed while the HAL was opening:
+                        // someone else (the live encoder) owns the sensor now.
+                        runFeature(Unit) { camera.close() }
+                        return
+                    }
                     device = camera
-                    startPreview(camera, surface, h)
+                    startPreview(camera, camSurface, h)
                 }
-                override fun onDisconnected(camera: CameraDevice) { close() }
-                override fun onError(camera: CameraDevice, error: Int) { close() }
+                override fun onDisconnected(camera: CameraDevice) {
+                    runFeature(Unit) { camera.close() }
+                    if (gen == generation) close()
+                }
+                override fun onError(camera: CameraDevice, error: Int) {
+                    runFeature(Unit) { camera.close() }
+                    if (gen == generation) close()
+                }
             }, h)
         }
     }
 
-    private fun startPreview(camera: CameraDevice, surface: Surface, h: Handler) {
+    /**
+     * Point the camera at either the TextureView (raw) or the lens engine
+     * input. The engine already cover-crops, so the view's transform is identity
+     * when filters are in the path — applying both is the 2x–7x zoom bug.
+     */
+    private fun bindPreview(
+        context: Context,
+        view: TextureView,
+        texture: SurfaceTexture,
+        size: Size,
+        vw: Int,
+        vh: Int,
+        rot: Int,
+        lens: LensController?,
+    ): Surface? {
+        if (lens != null) {
+            val caps = LensCaps.forDevice(DeviceClass.read(context.applicationContext))
+            lens.caps = caps
+            val engine = LensEngine(context.applicationContext, lens, caps)
+            val input = engine.start(size.width, size.height, sensorOrientation, facingFront, rot)
+            if (input != null && !engine.failed && engine.attachPreview(texture, vw, vh)) {
+                view.setTransform(Matrix())
+                lensEngine = engine
+                videoSize = engine.recordSize(vw, vh)
+                return input
+            }
+            android.util.Log.w("XaniCam", "lens engine unavailable, raw preview")
+            engine.release()
+        }
+        texture.setDefaultBufferSize(size.width, size.height)
+        view.setTransform(
+            previewTransform(vw, vh, size.width, size.height, rot, sensorOrientation, facingFront),
+        )
+        return Surface(texture)
+    }
+
+    /**
+     * Brings the viewfinder up, and keeps a promise: a vendor HAL that accepts
+     * our tuned request and then delivers nothing (no shutter, no buffers) gets
+     * one more chance with the bare template. The user sees a late first frame
+     * instead of a screen that stays black.
+     */
+    private fun startPreview(camera: CameraDevice, surface: Surface, h: Handler, tuned: Boolean = true) {
         runFeature(Unit) {
             val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
+                if (tuned) tune(this, record = false)
             }
+            val gen = generation
+            framed = false
             camera.createCaptureSession(listOf(surface), object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
+                    if (gen != generation) {
+                        runFeature(Unit) { session.close() }
+                        return
+                    }
                     capture = session
-                    runFeature(Unit) { session.setRepeatingRequest(req.build(), null, h) }
+                    runFeature(Unit) { session.setRepeatingRequest(req.build(), frameMark, h) }
+                    if (!tuned) return
+                    h.postDelayed({
+                        if (gen != generation || framed || device !== camera) return@postDelayed
+                        android.util.Log.w("XaniCam", "no frames from tuned request, retrying bare")
+                        runFeature(Unit) { capture?.close() }
+                        capture = null
+                        startPreview(camera, surface, h, tuned = false)
+                    }, FrameWaitMs)
                 }
-                override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) = Unit
+                override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                    android.util.Log.w("XaniCam", "capture session config failed tuned=$tuned")
+                    if (gen == generation && tuned) startPreview(camera, surface, h, tuned = false)
+                }
             }, h)
         }
+    }
+
+    private val frameMark = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: android.hardware.camera2.CameraCaptureSession,
+            request: CaptureRequest,
+            result: android.hardware.camera2.TotalCaptureResult,
+        ) {
+            framed = true
+        }
+    }
+
+    /**
+     * 3A + image pipeline: continuous autofocus, auto exposure with a wide
+     * fps range (slower shutter in the dark → brighter), auto white balance.
+     * Each key set alone so one unsupported value never loses the rest.
+     *
+     * FOV guards: EIS is forced OFF (it crops the frame — reads as "zoomed"
+     * and the HAL turns it on by itself under TEMPLATE_RECORD), the scaler
+     * crop is pinned to the full sensor, and zoom ratio to 1.0. OIS covers
+     * shake instead; it shifts the lens and costs no pixels.
+     */
+    private fun tune(req: CaptureRequest.Builder, record: Boolean) {
+        runFeature(Unit) { req.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO) }
+        afMode?.let { runFeature(Unit) { req.set(CaptureRequest.CONTROL_AF_MODE, it) } }
+        runFeature(Unit) { req.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON) }
+        runFeature(Unit) { req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO) }
+        runFeature(Unit) {
+            req.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+        }
+        aeFpsRange?.let { runFeature(Unit) { req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) } }
+        runFeature(Unit) {
+            req.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+        }
+        // No SCALER_CROP_REGION. The template already covers the full sensor,
+        // and the crop rect is measured from the active array's own origin —
+        // on sensors whose array starts at (8,8) the full-array rect runs 8px
+        // past the edge, and the HAL answers an out-of-range crop by accepting
+        // every request and returning no buffers at all: a black viewfinder.
+        // Zoom ratio states the same intent and is bounds-free.
+        if (Build.VERSION.SDK_INT >= 30) {
+            runFeature(Unit) { req.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1.0f) }
+        }
+        if (ois) {
+            runFeature(Unit) {
+                req.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON)
+            }
+        }
+        // HQ denoise smears a live viewfinder on mid chips; it is worth the
+        // latency only on the encoded clip.
+        val nrMode = when {
+            record && noiseHq -> CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            noiseFast -> CameraMetadata.NOISE_REDUCTION_MODE_FAST
+            else -> null
+        }
+        nrMode?.let { runFeature(Unit) { req.set(CaptureRequest.NOISE_REDUCTION_MODE, it) } }
     }
 
     /**
@@ -612,11 +840,22 @@ private class Camera2Session : VideoRecorder {
         val ctx = appContext ?: return false
         val rec = buildRecorder(ctx, file, withAudio) ?: return false
         recorder = rec
+        val engine = lensEngine
+        if (engine != null) {
+            engine.setRecord(rec.surface, videoSize.width, videoSize.height)
+            val ok = runFeature(false) { rec.start(); true }
+            if (ok) recording = true else {
+                engine.setRecord(null, 0, 0)
+                dropRecorder()
+            }
+            return ok
+        }
         val target = rec.surface
         val started = runFeature(false) {
             val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(preview)
                 addTarget(target)
+                tune(this, record = true)
             }
             camera.createCaptureSession(
                 listOf(preview, target),
@@ -646,6 +885,7 @@ private class Camera2Session : VideoRecorder {
         val wasRecording = recording
         recording = false
         recorder = null
+        lensEngine?.setRecord(null, 0, 0)
         // stop() throws when the encoder never got a frame (a tap-length
         // "recording"); the file is then unusable and the caller is told.
         val ok = runFeature(false) { rec.stop(); true } && wasRecording
@@ -654,7 +894,7 @@ private class Camera2Session : VideoRecorder {
         val camera = device
         val preview = previewSurface
         val h = handler
-        if (camera != null && preview != null && h != null) startPreview(camera, preview, h)
+        if (lensEngine == null && camera != null && preview != null && h != null) startPreview(camera, preview, h)
         return ok
     }
 
@@ -662,6 +902,7 @@ private class Camera2Session : VideoRecorder {
         val rec = recorder ?: return
         recorder = null
         recording = false
+        lensEngine?.setRecord(null, 0, 0)
         runFeature(Unit) { rec.reset() }
         runFeature(Unit) { rec.release() }
     }
@@ -710,7 +951,16 @@ private class Camera2Session : VideoRecorder {
         val vw = view.width.coerceAtLeast(1)
         val vh = view.height.coerceAtLeast(1)
         val rot = view.display?.rotation ?: displayRot
-        view.setTransform(fillCenter(vw, vh, previewW, previewH, rot, facingFront))
+        displayRot = rot
+        val engine = lensEngine
+        if (engine != null) {
+            view.setTransform(Matrix())
+            view.surfaceTexture?.let { engine.resizePreview(it, vw, vh) }
+            return
+        }
+        view.setTransform(
+            previewTransform(vw, vh, previewW, previewH, rot, sensorOrientation, facingFront),
+        )
     }
 
     /**
@@ -719,6 +969,7 @@ private class Camera2Session : VideoRecorder {
      * same sensor. That wait belongs on the camera thread, not on Main.
      */
     fun close() {
+        generation++
         openedKey = null
         // A clip in flight is finalised rather than abandoned: the file is
         // already on disk and the encoder holds a surface we are about to
@@ -727,6 +978,20 @@ private class Camera2Session : VideoRecorder {
         previewSurface = null
         if (recorder != null) {
             if (recording) stopVideo() else dropRecorder()
+        }
+        val engine = lensEngine
+        lensEngine = null
+        if (engine != null) {
+            // The preview detaches synchronously: the next open() binds a new
+            // EGL surface to the same TextureView texture, and EGL refuses a
+            // window that still has a producer — that refusal was a silent,
+            // permanent black viewfinder. The slow parts (encoder, context)
+            // still leave on their own thread.
+            runFeature(Unit) { engine.detachPreview() }
+            Thread({
+                runFeature(Unit) { engine.setRecord(null, 0, 0) }
+                engine.release()
+            }, "lens-close").start()
         }
         val cap = capture
         val dev = device
@@ -758,17 +1023,41 @@ private class Camera2Session : VideoRecorder {
     }
 
     private fun chooseSize(mgr: CameraManager, id: String, viewW: Int, viewH: Int): Size {
-        val map = mgr.getCameraCharacteristics(id).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val chars = mgr.getCameraCharacteristics(id)
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return Size(viewW, viewH)
         val sizes = map.getOutputSizes(SurfaceTexture::class.java) ?: return Size(viewW, viewH)
-        val target = maxOf(viewW, viewH).toFloat() / minOf(viewW, viewH).coerceAtLeast(1)
-        return sizes
-            .filter { maxOf(it.width, it.height) in 720..1920 }
-            .minByOrNull {
-                val br = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).coerceAtLeast(1)
-                kotlin.math.abs(br - target)
-            }
-            ?: sizes.first()
+        val sensor = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        // Upright aspect the view needs after sensor rotation (portrait phone → ~9:16 buffer on screen).
+        val viewAspect = viewW.toFloat() / viewH.coerceAtLeast(1)
+        val wantLong = maxOf(viewW, viewH).coerceIn(1080, 1920)
+        // Prefer a buffer whose upright aspect matches the view, then the sharpest
+        // size near the view's long edge — never settle on the first 720p match.
+        fun uprightAspect(s: Size): Float {
+            val swap = sensor % 180 != 0
+            val w = if (swap) s.height else s.width
+            val h = if (swap) s.width else s.height
+            return w.toFloat() / h.coerceAtLeast(1)
+        }
+        val wide = sizes.filter {
+            val long = maxOf(it.width, it.height)
+            long in 720..1920
+        }
+        // A buffer the view has to upscale is soft on screen and in the clip, and
+        // some sensors offer odd 2:1 crops (800x400) whose aspect looks like a
+        // perfect match. Demand 720 lines first; fall back only if none exist.
+        val candidates = wide.filter { minOf(it.width, it.height) >= 720 }.ifEmpty { wide }
+        return candidates.maxWithOrNull(
+            compareBy<Size> {
+                // Closer aspect wins first (less crop → less "zoomed" FILL).
+                -kotlin.math.abs(uprightAspect(it) - viewAspect)
+            }.thenBy {
+                // Then prefer near the view's pixel demand.
+                -kotlin.math.abs(maxOf(it.width, it.height) - wantLong)
+            }.thenBy {
+                it.width.toLong() * it.height
+            },
+        ) ?: sizes.maxByOrNull { it.width.toLong() * it.height } ?: Size(viewW, viewH)
     }
 
     /**
@@ -782,7 +1071,7 @@ private class Camera2Session : VideoRecorder {
         val sizes = map.getOutputSizes(MediaRecorder::class.java) ?: return@runFeature preview
         val target = preview.width.toFloat() / preview.height.coerceAtLeast(1)
         sizes
-            .filter { maxOf(it.width, it.height) <= 1920 }
+            .filter { maxOf(it.width, it.height) in 720..1920 }
             .maxWithOrNull(
                 compareBy(
                     { -kotlin.math.abs(it.width.toFloat() / it.height.coerceAtLeast(1) - target) },
@@ -791,6 +1080,11 @@ private class Camera2Session : VideoRecorder {
             )
             ?: sizes.first()
     }
+
+    private companion object {
+        /** Long enough for a cold HAL to deliver its first frame, short enough to not read as a hang. */
+        const val FrameWaitMs = 1500L
+    }
 }
 
 private fun bitrateFor(size: Size): Int {
@@ -798,16 +1092,60 @@ private fun bitrateFor(size: Size): Int {
     return (pixels * 4L).coerceIn(2_000_000L, 12_000_000L).toInt()
 }
 
-private fun fillCenter(viewW: Int, viewH: Int, bufW: Int, bufH: Int, rotation: Int, front: Boolean): Matrix {
+/**
+ * Camera2 → TextureView mapping.
+ *
+ * TextureView has ALREADY stretched the (auto-rotated) camera stream to the
+ * view bounds before this matrix runs. The old code multiplied a buffer-pixel
+ * "cover" scale on top of that implicit stretch — scales compounded and the
+ * viewfinder looked 2x–7x zoomed. The fix: divide out the implicit per-axis
+ * stretch and reapply one uniform cover scale. Result: real 1x FOV, square
+ * pixels (no stretch), and only the thin aspect mismatch is cropped.
+ */
+private fun previewTransform(
+    viewW: Int,
+    viewH: Int,
+    bufW: Int,
+    bufH: Int,
+    displayRotation: Int,
+    sensorOrientation: Int,
+    front: Boolean,
+): Matrix {
     val matrix = Matrix()
     if (viewW <= 0 || viewH <= 0 || bufW <= 0 || bufH <= 0) return matrix
-    val swap = viewH > viewW && bufW > bufH
-    val srcW = if (swap) bufH.toFloat() else bufW.toFloat()
-    val srcH = if (swap) bufW.toFloat() else bufH.toFloat()
-    val scale = maxOf(viewW / srcW, viewH / srcH)
-    matrix.setScale(scale, scale)
-    matrix.postTranslate((viewW - srcW * scale) * 0.5f, (viewH - srcH * scale) * 0.5f)
-    if (front) matrix.postScale(-1f, 1f, viewW / 2f, viewH / 2f)
+    val cx = viewW / 2f
+    val cy = viewH / 2f
+
+    // Upright content size in the device's natural orientation — the stream
+    // transform has already rotated the sensor buffer for display.
+    val swap = sensorOrientation % 180 != 0
+    val uprightW = (if (swap) bufH else bufW).toFloat()
+    val uprightH = (if (swap) bufW else bufH).toFloat()
+
+    when (displayRotation) {
+        Surface.ROTATION_90, Surface.ROTATION_270 -> {
+            // Display rotated against natural orientation (Camera2Basic):
+            // map the view onto the swapped buffer, cover, counter-rotate.
+            val viewRect = android.graphics.RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
+            val bufferRect = android.graphics.RectF(0f, 0f, uprightH, uprightW)
+            bufferRect.offset(cx - bufferRect.centerX(), cy - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+            val scale = maxOf(viewH / uprightW, viewW / uprightH)
+            matrix.postScale(scale, scale, cx, cy)
+            matrix.postRotate(if (displayRotation == Surface.ROTATION_90) 270f else 90f, cx, cy)
+        }
+        else -> {
+            // Natural orientation (and 180): undo the implicit stretch, then
+            // one uniform scale to cover. stretch == cover on the long axis,
+            // so that axis stays 1:1 — true field of view.
+            val stretchX = viewW / uprightW
+            val stretchY = viewH / uprightH
+            val cover = maxOf(stretchX, stretchY)
+            matrix.setScale(cover / stretchX, cover / stretchY, cx, cy)
+            if (displayRotation == Surface.ROTATION_180) matrix.postRotate(180f, cx, cy)
+        }
+    }
+    if (front) matrix.postScale(-1f, 1f, cx, cy)
     return matrix
 }
 
@@ -1287,7 +1625,13 @@ fun ContactPickSheet(
     val picked = remember { mutableStateListOf<Long>() }
     val contactPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         allowed = ok
-        if (ok) scope.launch { people = withContext(Dispatchers.IO) { loadDeviceContacts(context) } }
+        if (ok) {
+            // The contacts permission is the real consent gate: once it is
+            // granted here, the full address book syncs to the server in the
+            // background for friend matching, whether or not Find friends is on.
+            ContactSync.syncNow()
+            scope.launch { people = withContext(Dispatchers.IO) { loadDeviceContacts(context) } }
+        }
     }
     LaunchedEffect(allowed) {
         if (allowed) people = withContext(Dispatchers.IO) { loadDeviceContacts(context) }

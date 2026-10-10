@@ -5,6 +5,7 @@ keystore.properties
 .idea/
 .DS_Store
 build/
+app/brand/
 captures/
 .externalNativeBuild/
 .cxx/

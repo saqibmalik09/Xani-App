@@ -12,10 +12,12 @@ sealed interface PushRoute {
     data class Live(val roomId: Long) : PushRoute
     data class Post(val postId: Long, val commentId: Long) : PushRoute
     data class Profile(val userId: Long) : PushRoute
+    /** Share link `@username` / `u/username` — resolve to id after sign-in. */
+    data class ProfileUsername(val username: String) : PushRoute
     data class SupportTicket(val ticketId: Long) : PushRoute
     data class RoleRequest(val requestId: Long) : PushRoute
-    /** Referral link tapped: open the join-with-code form prefilled. */
-    data class Join(val code: String) : PushRoute
+    /** Referral link: open join form with code and optional target role. */
+    data class Join(val code: String, val roleSlug: String = "") : PushRoute
     data object Notices : PushRoute
     data object Home : PushRoute
 }
@@ -63,19 +65,45 @@ object PushRouter {
     }
 
     /**
-     * A link the app owns (https://host/join/CODE or scheme://join/CODE)
-     * becomes a typed route; anything else is ignored.
+     * A link the app owns becomes a typed route:
+     * - https://host/live/{roomId} or scheme://live/{roomId}
+     * - https://host/join/CODE[/ROLE] or scheme://join/CODE[/ROLE]
+     * - https://host/@user, /u/user, or scheme://u/user / @user
      */
     fun parseLink(uri: android.net.Uri): PushRoute? {
         val parts = uri.pathSegments.orEmpty()
         val host = uri.host.orEmpty()
-        val code = when {
-            parts.size >= 2 && parts[0] == "join" -> parts[1]
-            host == "join" && parts.isNotEmpty() -> parts[0] // scheme://join/CODE
-            else -> uri.getQueryParameter("code").orEmpty()
-        }.trim().uppercase()
+        // Live share: /live/{id} or scheme://live/{id} (host == "live").
+        val liveId = when {
+            parts.size >= 2 && parts[0].equals("live", ignoreCase = true) -> parts[1]
+            parts.size == 1 && host.equals("live", ignoreCase = true) -> parts[0]
+            else -> null
+        }?.toLongOrNull()?.takeIf { it > 0L }
+        if (liveId != null) return PushRoute.Live(liveId)
+        // Profile: /@user, /u/user, host=@user (scheme://@user), scheme://u/user
+        val profileUser = when {
+            parts.size >= 2 && parts[0].equals("u", ignoreCase = true) -> parts[1]
+            parts.size == 1 && parts[0].startsWith("@") -> parts[0].removePrefix("@")
+            parts.size == 1 && host.equals("u", ignoreCase = true) -> parts[0]
+            parts.isEmpty() && host.startsWith("@") -> host.removePrefix("@")
+            parts.size == 1 && !parts[0].equals("join", ignoreCase = true) &&
+                !parts[0].equals("live", ignoreCase = true) &&
+                host.isNotEmpty() && !host.contains('.') && parts[0].matches(Regex("^[a-zA-Z0-9._]{3,30}$")) &&
+                uri.scheme?.contains("http") != true -> parts[0] // scheme://username
+            else -> null
+        }?.trim()?.removePrefix("@")?.lowercase()
+        if (!profileUser.isNullOrEmpty() && profileUser.matches(Regex("^[a-zA-Z0-9._]{3,30}$"))) {
+            return PushRoute.ProfileUsername(profileUser)
+        }
+        val (codeRaw, roleRaw) = when {
+            parts.size >= 2 && parts[0] == "join" -> parts[1] to parts.getOrNull(2).orEmpty()
+            host == "join" && parts.isNotEmpty() -> parts[0] to parts.getOrNull(1).orEmpty()
+            else -> uri.getQueryParameter("code").orEmpty() to uri.getQueryParameter("role").orEmpty()
+        }
+        val code = codeRaw.trim().uppercase()
         if (code.length !in 4..32 || !code.all { it.isLetterOrDigit() || it == '-' }) return null
-        return PushRoute.Join(code)
+        val role = roleRaw.trim().lowercase().filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+        return PushRoute.Join(code, role)
     }
 
     /** Called from the activity for launch and re-launch intents. */

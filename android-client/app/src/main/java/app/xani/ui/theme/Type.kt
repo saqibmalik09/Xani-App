@@ -19,11 +19,14 @@ private val Trim = LineHeightStyle(
 )
 
 object Type {
+    // Display serif for the brand name: a white-label owner's name is set from
+    // the dashboard, so the style has to read well in any capitalisation —
+    // which the old tight-tracked lowercase sans did not.
     val Wordmark = TextStyle(
-        fontFamily = Outfit,
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 52.sp,
-        letterSpacing = (-2.1).sp,
+        fontFamily = Fraunces,
+        fontWeight = FontWeight.Bold,
+        fontSize = 50.sp,
+        letterSpacing = (-0.5).sp,
         lineHeightStyle = Trim,
     )
     val Tagline = TextStyle(

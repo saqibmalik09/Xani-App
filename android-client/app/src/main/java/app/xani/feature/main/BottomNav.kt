@@ -56,6 +56,9 @@ fun MainBottomBar(
     onTab: (MainTab) -> Unit,
     copy: Copy,
     modifier: Modifier = Modifier,
+    showHome: Boolean = true,
+    showCreate: Boolean = true,
+    showInbox: Boolean = true,
     inboxUnread: Int = 0,
 ) {
     val density = LocalDensity.current
@@ -83,12 +86,14 @@ fun MainBottomBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
-            NavItem(
-                label = copy.t(Copy.TabHome),
-                active = tab == MainTab.Home,
-                light = light,
-                onClick = { onTab(MainTab.Home) },
-            ) { tint, on -> HomeGlyph(tint, on) }
+            if (showHome) {
+                NavItem(
+                    label = copy.t(Copy.TabHome),
+                    active = tab == MainTab.Home,
+                    light = light,
+                    onClick = { onTab(MainTab.Home) },
+                ) { tint, on -> HomeGlyph(tint, on) }
+            }
 
             NavItem(
                 label = copy.t(Copy.TabGames),
@@ -97,20 +102,24 @@ fun MainBottomBar(
                 onClick = { onTab(MainTab.Games) },
             ) { tint, _ -> GamesGlyph(tint) }
 
-            CreateItem(
-                label = copy.t(Copy.TabCreate),
-                active = tab == MainTab.Create,
-                light = light,
-                onClick = { onTab(MainTab.Create) },
-            )
+            if (showCreate) {
+                CreateItem(
+                    label = copy.t(Copy.TabCreate),
+                    active = tab == MainTab.Create,
+                    light = light,
+                    onClick = { onTab(MainTab.Create) },
+                )
+            }
 
-            NavItem(
-                label = copy.t(Copy.TabInbox),
-                active = tab == MainTab.Inbox,
-                light = light,
-                onClick = { onTab(MainTab.Inbox) },
-                badge = inboxUnread,
-            ) { tint, _ -> InboxGlyph(tint) }
+            if (showInbox) {
+                NavItem(
+                    label = copy.t(Copy.TabInbox),
+                    active = tab == MainTab.Inbox,
+                    light = light,
+                    onClick = { onTab(MainTab.Inbox) },
+                    badge = inboxUnread,
+                ) { tint, _ -> InboxGlyph(tint) }
+            }
 
             NavItem(
                 label = copy.t(Copy.TabProfile),
@@ -142,7 +151,7 @@ private fun NavItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(rdp(3)),
     ) {
-        Box(Modifier.size(rdp(24)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(rdp(27)), contentAlignment = Alignment.Center) {
             icon(tint, active)
             if (badge > 0) {
                 Box(
@@ -166,7 +175,7 @@ private fun NavItem(
             text = label,
             style = if (active) Type.LabelBold else Type.Label,
             color = tint,
-            fontSizeOverride = 11f,
+            fontSizeOverride = 12f,
         )
     }
 }
@@ -189,8 +198,8 @@ private fun CreateItem(
     ) {
         Box(
             modifier = Modifier
-                .width(rdp(50))
-                .height(rdp(34)),
+                .width(rdp(52))
+                .height(rdp(36)),
         ) {
             Box(
                 Modifier
@@ -218,7 +227,7 @@ private fun CreateItem(
                     text = "+",
                     style = Type.H1,
                     color = Color(0xFF111111),
-                    fontSizeOverride = 20f,
+                    fontSizeOverride = 22f,
                 )
             }
         }
@@ -226,7 +235,7 @@ private fun CreateItem(
             text = label,
             style = if (active) Type.LabelBold else Type.Label,
             color = if (active) on else on.copy(alpha = 0.4f),
-            fontSizeOverride = 11f,
+            fontSizeOverride = 12f,
         )
     }
 }
@@ -237,7 +246,7 @@ private fun HomeGlyph(tint: Color, filled: Boolean) {
     VectorCanvas(
         shapes = listOf(VShape.D("M3 12L12 4L21 12V21H15V16H9V21H3V12Z", paint)),
         viewport = 24f,
-        modifier = Modifier.size(rdp(24)),
+        modifier = Modifier.size(rdp(27)),
     )
 }
 
@@ -251,7 +260,7 @@ private fun GamesGlyph(tint: Color) {
             VShape.Circle(17.5f, 11f, 1f, fill(tint)),
         ),
         viewport = 24f,
-        modifier = Modifier.size(rdp(24)),
+        modifier = Modifier.size(rdp(27)),
     )
 }
 
@@ -263,7 +272,7 @@ private fun InboxGlyph(tint: Color) {
             VShape.D("M4 4l8 8 8-8", stroke(tint, 1.5f)),
         ),
         viewport = 24f,
-        modifier = Modifier.size(rdp(24)),
+        modifier = Modifier.size(rdp(27)),
     )
 }
 
@@ -275,7 +284,7 @@ private fun ProfileGlyph(tint: Color) {
             VShape.D("M4 20C4 16.7 7.6 14 12 14s8 2.7 8 6", stroke(tint, 1.5f)),
         ),
         viewport = 24f,
-        modifier = Modifier.size(rdp(24)),
+        modifier = Modifier.size(rdp(27)),
     )
 }
 

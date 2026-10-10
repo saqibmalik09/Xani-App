@@ -6,7 +6,30 @@ enum InboxLane: String, CaseIterable {
     case chats, notifications, activity
 }
 
-enum MsgKind { case text, image, video, voice, contact, location, document, poll, event, ai }
+enum MsgKind { case text, image, video, voice, contact, location, document, poll, event, ai, system }
+
+struct CallMsg {
+    let video: Bool
+    let status: String
+    let durationSec: Int
+    let callId: Int64
+}
+
+func parseCallMsg(_ text: String) -> CallMsg? {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    guard let first = lines.first, first.trimmingCharacters(in: .whitespaces) == "#call" else { return nil }
+    return CallMsg(
+        video: (lines.count > 1 ? lines[1].trimmingCharacters(in: .whitespaces) : "") == "video",
+        status: lines.count > 2 ? lines[2].trimmingCharacters(in: .whitespaces) : "ended",
+        durationSec: max(0, Int(lines.count > 3 ? lines[3].trimmingCharacters(in: .whitespaces) : "0") ?? 0),
+        callId: Int64(lines.count > 4 ? lines[4].trimmingCharacters(in: .whitespaces) : "0") ?? 0
+    )
+}
+
+func formatCallClock(_ sec: Int) -> String {
+    let s = max(0, sec)
+    return String(format: "%d:%02d", s / 60, s % 60)
+}
 enum VanishTimer { case off, seen, hours, days }
 
 /// Where one of my messages is: on its way, on the server, on their phone, read.
@@ -1272,6 +1295,7 @@ final class InboxController: ObservableObject {
         case .document: return "document"
         case .poll: return "poll"
         case .event: return "event"
+        case .system: return "system"
         }
     }
 
@@ -1285,6 +1309,7 @@ final class InboxController: ObservableObject {
         case "document": return .document
         case "poll": return .poll
         case "event": return .event
+        case "system": return .system
         default: return .text
         }
     }
@@ -1328,6 +1353,20 @@ func preview(of msg: ChatMessage) -> String {
     case .poll: return "📊 \(msg.text)"
     case .event: return "📅 \(msg.text)"
     case .ai: return msg.text.isEmpty ? "✨ AI image" : msg.text
+    case .system:
+        if let call = parseCallMsg(msg.text) {
+            let label = call.video ? "Video call" : "Voice call"
+            switch call.status {
+            case "ongoing": return "📞 \(label) · Ongoing"
+            case "declined": return "📞 Declined \(label.lowercased())"
+            case "missed": return "📞 Missed \(label.lowercased())"
+            case "cancelled": return "📞 Cancelled \(label.lowercased())"
+            case "busy": return "📞 Busy"
+            default:
+                return call.durationSec > 0 ? "📞 \(label) · \(formatCallClock(call.durationSec))" : "📞 \(label)"
+            }
+        }
+        return msg.text.isEmpty ? "Update" : msg.text
     case .text: return msg.text
     }
 }

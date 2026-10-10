@@ -1,0 +1,2 @@
+app.xani
+string app_name

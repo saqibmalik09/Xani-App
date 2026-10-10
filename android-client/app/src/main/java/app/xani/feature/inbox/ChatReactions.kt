@@ -447,7 +447,7 @@ internal fun ForwardPickSheet(
     val context = LocalContext.current
     val brand = LocalBrand.current
     val clipboard = LocalClipboardManager.current
-    val shareLink = "https://${brand.wordmark}.app/s"
+    val shareLink = "https://${brand.slug}.app/s"
     val scope = rememberCoroutineScope()
     val isMedia = kind == MsgKind.Image || kind == MsgKind.Video || kind == MsgKind.Ai
     LaunchedEffect(Unit) {

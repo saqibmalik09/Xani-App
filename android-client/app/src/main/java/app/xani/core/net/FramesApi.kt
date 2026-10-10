@@ -49,9 +49,89 @@ data class FrameItemData(
 }
 
 @Immutable
-data class FrameCategoryData(val id: Long, val title: String) {
+data class FrameCategoryData(
+    val id: Long,
+    val title: String,
+    /** 0 = top level. Sub-categories roll up into their root on the profile. */
+    val parentId: Long = 0L,
+    val icon: String = "",
+    val sortOrder: Int = 0,
+) {
     companion object {
-        fun from(json: JSONObject) = FrameCategoryData(id = json.id("id"), title = json.str("title"))
+        fun from(json: JSONObject) = FrameCategoryData(
+            id = json.id("id"),
+            title = json.str("title"),
+            parentId = json.id("parent_id"),
+            icon = json.str("icon"),
+            sortOrder = json.int("sort_order"),
+        )
+    }
+}
+
+/**
+ * One category box on the profile: what the shop sells there and what this
+ * user holds in it. [icon] is the admin's pick or the dominant item kind.
+ */
+@Immutable
+data class ShelfCategoryData(
+    val id: Long,
+    val title: String,
+    val icon: String,
+    val kind: String,
+    val sortOrder: Int,
+    val items: Int,
+    val owned: Int,
+    val active: Int,
+    val expired: Int,
+    val expiringMs: Long,
+    val latestMs: Long,
+) {
+    companion object {
+        fun from(json: JSONObject) = ShelfCategoryData(
+            id = json.id("id"),
+            title = json.str("title"),
+            icon = json.str("icon"),
+            kind = json.str("kind"),
+            sortOrder = json.int("sort_order"),
+            items = json.int("items"),
+            owned = json.int("owned"),
+            active = json.int("active"),
+            expired = json.int("expired"),
+            expiringMs = json.long("expiring_ms"),
+            latestMs = json.long("latest_ms"),
+        )
+    }
+}
+
+/** Free items (signup pack, role pack, admin grant) — the "Free" box. */
+@Immutable
+data class ShelfBonusData(
+    val available: Boolean,
+    val owned: Int,
+    val active: Int,
+    val expired: Int,
+    val latestMs: Long,
+) {
+    companion object {
+        val Empty = ShelfBonusData(false, 0, 0, 0, 0L)
+        fun from(json: JSONObject) = ShelfBonusData(
+            available = json.bool("available"),
+            owned = json.int("owned"),
+            active = json.int("active"),
+            expired = json.int("expired"),
+            latestMs = json.long("latest_ms"),
+        )
+    }
+}
+
+@Immutable
+data class StoreShelfData(val categories: List<ShelfCategoryData>, val bonus: ShelfBonusData) {
+    companion object {
+        val Empty = StoreShelfData(emptyList(), ShelfBonusData.Empty)
+        fun from(json: JSONObject) = StoreShelfData(
+            categories = json.objects("categories").map(ShelfCategoryData::from),
+            bonus = json.obj("bonus")?.let(ShelfBonusData::from) ?: ShelfBonusData.Empty,
+        )
     }
 }
 
@@ -83,7 +163,12 @@ data class OwnedFrameData(
     val expired: Boolean,
     /** 0 = permanent. */
     val expiresAtMs: Long,
+    val categoryId: Long = 0L,
+    val createdAtMs: Long = 0L,
 ) {
+    /** Free items: anything the user did not pay coins for. */
+    val isFree: Boolean get() = source.isNotEmpty() && source != "purchase"
+
     companion object {
         fun from(json: JSONObject) = OwnedFrameData(
             id = json.id("id"),
@@ -99,6 +184,8 @@ data class OwnedFrameData(
             active = json.bool("active"),
             expired = json.bool("expired"),
             expiresAtMs = json.long("expires_at_ms"),
+            categoryId = json.id("category_id"),
+            createdAtMs = json.long("created_at_ms"),
         )
     }
 }
@@ -112,6 +199,10 @@ class FramesApi internal constructor(private val api: ApiClient) {
     /** The shop: active frames with their duration packages, grouped by category. */
     suspend fun catalog(): ApiResponse<FrameCatalogData> =
         api.get("/v1/store/frames", authenticated = true) { FrameCatalogData.from(it) }
+
+    /** The profile's category boxes with what the user owns in each. */
+    suspend fun shelf(): ApiResponse<StoreShelfData> =
+        api.get("/v1/store/shelf", authenticated = true) { StoreShelfData.from(it) }
 
     /**
      * Buys one duration package of a frame. [clientId] is the idempotency key:

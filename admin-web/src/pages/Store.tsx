@@ -10,10 +10,27 @@ type StoreCat = {
   parent_id?: string | null
   title: string
   description: string
+  /** Glyph the app draws on the profile box; '' = auto from the items inside. */
+  icon?: string
   status: number
   sort_order: number
   child_count?: number
 }
+
+/** Icons the app can draw on a profile category box (mirrors store.StoreCategoryIcons). */
+const CATEGORY_ICONS: Array<[string, string]> = [
+  ['', 'Auto (from items)'],
+  ['frame', 'Avatar frame'],
+  ['badge', 'Badge'],
+  ['entrance', 'Entrance / entry'],
+  ['vip', 'VIP'],
+  ['bubble', 'Chat bubble'],
+  ['crown', 'Crown'],
+  ['star', 'Star'],
+  ['gift', 'Gift'],
+  ['diamond', 'Diamond'],
+  ['bag', 'Bag'],
+]
 
 type StoreItem = {
   id: string
@@ -27,6 +44,11 @@ type StoreItem = {
   preview_mime: string
   asset_key: string
   asset_mime: string
+  /** How long the effect holds the screen (entrances); 0 = app default (5 s). */
+  duration_ms: number
+  /** Optional audio (mp3/wav/aac/ogg) played to the room while it shows. */
+  sound_key: string
+  sound_mime: string
   status: number
   sort_order: number
   created_at: string
@@ -147,6 +169,8 @@ export function StorePage() {
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState(1)
   const [parentId, setParentId] = useState('')
+  const [icon, setIcon] = useState('')
+  const [sortOrder, setSortOrder] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -168,6 +192,9 @@ export function StorePage() {
   const tree = useMemo(() => buildTree(items), [items])
   const flat = useMemo(() => flattenTree(tree), [tree])
 
+  const nextSort = (parent: string) =>
+    items.filter((c) => (c.parent_id || '') === parent).reduce((m, c) => Math.max(m, c.sort_order), 0) + 10
+
   const startCreateRoot = () => {
     setCreating(true)
     setEditing(null)
@@ -175,6 +202,8 @@ export function StorePage() {
     setDescription('')
     setStatus(1)
     setParentId('')
+    setIcon('')
+    setSortOrder(nextSort(''))
     setError('')
     setOk('')
   }
@@ -186,6 +215,8 @@ export function StorePage() {
     setDescription('')
     setStatus(1)
     setParentId(parent.id)
+    setIcon('')
+    setSortOrder(nextSort(parent.id))
     setError('')
     setOk('')
   }
@@ -197,6 +228,8 @@ export function StorePage() {
     setDescription(c.description)
     setStatus(c.status)
     setParentId(c.parent_id || '')
+    setIcon(c.icon || '')
+    setSortOrder(c.sort_order)
     setError('')
     setOk('')
   }
@@ -209,8 +242,9 @@ export function StorePage() {
     const body = {
       title: title.trim(),
       description,
+      icon,
       status,
-      sort_order: editing?.sort_order ?? 0,
+      sort_order: sortOrder,
       parent_id: parentId || undefined,
       clear_parent: !parentId && !!editing,
     }
@@ -218,6 +252,7 @@ export function StorePage() {
       ? await post<StoreCat>('/v1/admin/store-categories', {
           title: body.title,
           description: body.description,
+          icon: body.icon,
           status: body.status,
           sort_order: body.sort_order,
           parent_id: body.parent_id,
@@ -374,6 +409,39 @@ export function StorePage() {
                   <option value={1}>Active</option>
                   <option value={0}>Inactive</option>
                 </select>
+                <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                  Active top categories appear as boxes on every user's profile; inactive ones are hidden everywhere.
+                </span>
+              </label>
+
+              {!parentId ? (
+                <label className="field-label">
+                  Profile icon
+                  <select value={icon} onChange={(e) => setIcon(e.target.value)} style={selectStyle}>
+                    {CATEGORY_ICONS.map(([v, label]) => (
+                      <option key={v || 'auto'} value={v}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                    Drawn on this category's box on the profile. Auto picks from the item type inside.
+                  </span>
+                </label>
+              ) : null}
+
+              <label className="field-label">
+                Order
+                <input
+                  type="number"
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(Number(e.target.value) || 0)}
+                  style={{ ...selectStyle, cursor: 'text' }}
+                  aria-label="Sort order"
+                />
+                <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                  Lower comes first, on the profile and in the shop.
+                </span>
               </label>
 
               <div className="form-actions">
@@ -434,9 +502,16 @@ function ItemsPanel({ category }: { category: StoreCat }) {
   const [assetKey, setAssetKey] = useState('')
   const [assetMime, setAssetMime] = useState('')
   const [assetName, setAssetName] = useState('')
+  // Entrance extras: how long the effect holds the room (seconds in the form,
+  // milliseconds on the wire; 0 = the app default of 5 s) and its sound.
+  const [showSeconds, setShowSeconds] = useState(0)
+  const [soundKey, setSoundKey] = useState('')
+  const [soundMime, setSoundMime] = useState('')
+  const [soundName, setSoundName] = useState('')
   const [packages, setPackages] = useState<ItemPrice[]>([])
   const previewRef = useRef<HTMLInputElement>(null)
   const assetRef = useRef<HTMLInputElement>(null)
+  const soundRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -466,6 +541,10 @@ function ItemsPanel({ category }: { category: StoreCat }) {
     setAssetKey(it?.asset_key || '')
     setAssetMime(it?.asset_mime || '')
     setAssetName(it?.asset_key ? it.asset_key.split('/').pop() || it.asset_key : '')
+    setShowSeconds(it?.duration_ms ? Math.round(it.duration_ms / 1000) : 0)
+    setSoundKey(it?.sound_key || '')
+    setSoundMime(it?.sound_mime || '')
+    setSoundName(it?.sound_key ? it.sound_key.split('/').pop() || it.sound_key : '')
   }
 
   const startCreate = () => {
@@ -484,7 +563,7 @@ function ItemsPanel({ category }: { category: StoreCat }) {
     setOk('')
   }
 
-  const upload = async (k: 'preview' | 'asset', file: File) => {
+  const upload = async (k: 'preview' | 'asset' | 'sound', file: File) => {
     const ext = file.name.includes('.') ? file.name.split('.').pop() : ''
     // Browsers report no type for .svga; the server resolves the extension.
     const r = await putBytes<{ key: string; mime: string }>(
@@ -527,6 +606,22 @@ function ItemsPanel({ category }: { category: StoreCat }) {
     setBusy(false)
   }
 
+  const onSoundPick = async (file: File | null) => {
+    if (!file) return
+    setBusy(true)
+    setError('')
+    try {
+      const up = await upload('sound', file)
+      setSoundKey(up.key)
+      setSoundMime(up.mime)
+      setSoundName(file.name || up.key)
+      setOk('Sound uploaded.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed')
+    }
+    setBusy(false)
+  }
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
@@ -544,6 +639,9 @@ function ItemsPanel({ category }: { category: StoreCat }) {
       preview_mime: previewMime,
       asset_key: assetKey,
       asset_mime: assetMime,
+      duration_ms: Math.max(0, Math.round(showSeconds)) * 1000,
+      sound_key: soundKey,
+      sound_mime: soundKey ? soundMime : '',
       sort_order: editing?.sort_order ?? 0,
       prices: packages,
     }
@@ -782,6 +880,62 @@ function ItemsPanel({ category }: { category: StoreCat }) {
                 onChange={(e) => void onAssetPick(e.target.files?.[0] || null)}
               />
             </div>
+            {normalizeKind(kind) === 'entrance' ? (
+              <>
+                <Field
+                  label="Show for (seconds, 0 = default 5s)"
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={String(showSeconds)}
+                  onChange={(e) => setShowSeconds(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
+                />
+                <div className="brand-pick">
+                  <span className="brand-label">Entrance sound (optional)</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => soundRef.current?.click()}
+                    disabled={busy}
+                  >
+                    {soundKey ? 'Replace sound' : 'Upload sound'}
+                  </Button>
+                  {soundKey ? (
+                    <>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        {soundName} · {soundMime || 'audio'}
+                      </span>
+                      <audio controls preload="none" src={mediaUrl(mediaBase, soundKey)} style={{ height: 30 }} />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        style={{ minWidth: 0, padding: '0 8px' }}
+                        onClick={() => {
+                          setSoundKey('')
+                          setSoundMime('')
+                          setSoundName('')
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    </>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      MP3 / WAV / AAC / OGG — played to the whole room while the entrance shows.
+                    </span>
+                  )}
+                  <input
+                    ref={soundRef}
+                    type="file"
+                    accept="audio/*,.mp3,.wav,.aac,.m4a,.ogg"
+                    hidden
+                    onChange={(e) => void onSoundPick(e.target.files?.[0] || null)}
+                  />
+                </div>
+              </>
+            ) : null}
             <div className="form-actions">
               <Button type="submit" size="sm" loading={busy}>
                 {creating ? 'Create' : 'Save'}

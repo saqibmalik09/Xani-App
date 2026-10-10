@@ -55,12 +55,17 @@ internal object GiftCatalogStore {
         }
     }
 
-    /** Warm the listing images for the first two categories (what opens first). */
+    /**
+     * Warm the first visible screen of listing images (two rows past a 4-wide
+     * grid). Prefetch runs on the loader's background lane, so even this burst
+     * never delays a visible cell or starves a live stream of bandwidth —
+     * anything the user scrolls to is promoted to the visible lane on demand.
+     */
     private fun warmListings(data: GiftCatalogData) {
         var n = 0
         for (c in data.categories) {
             for (g in c.gifts) {
-                if (n++ >= 48) return
+                if (n++ >= 16) return
                 ImageLoader.prefetch(giftImageUrl(g.listingUrl), LISTING_EDGE)
             }
         }

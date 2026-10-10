@@ -214,6 +214,10 @@ class ProfileApi internal constructor(private val api: ApiClient) {
         onCall: (name: String, data: JSONObject) -> Unit = { _, _ -> },
         onActivity: (ActivityData) -> Unit = {},
         onNotice: (NoticeData) -> Unit = {},
+        onAccess: () -> Unit = {},
+        onVersion: () -> Unit = {},
+        onReward: (RewardToast) -> Unit = {},
+        onGifting: (GiftingUserEvent) -> Unit = {},
     ) = api.stream("/v1/profile/stream") { name, json ->
         val data = json.obj("data") ?: JSONObject()
         when (name) {
@@ -222,6 +226,8 @@ class ProfileApi internal constructor(private val api: ApiClient) {
             "activity" -> onActivity(ActivityData.from(data))
             "notice" -> onNotice(NoticeData.from(data))
             "wallet" -> onBalance(Balance.from(data))
+            // A live-time reward landed or became claimable: the HUD toast.
+            "reward_toast" -> RewardToast.from(data)?.let(onReward)
             "post" -> onPost(PostData.from(data))
             "post_gone" -> data.id("post_id").takeIf { it > 0 }?.let(onPostGone)
             // Someone engaged with one of my posts. This arrives on my own
@@ -231,7 +237,15 @@ class ProfileApi internal constructor(private val api: ApiClient) {
             // Somebody opened my profile: the header's visit count, nothing else.
             "profile_views" -> onProfileViews(data.long("profile_views"))
             "resync" -> onResync()
+            // Permissions changed (capture granted/revoked, mic disabled): the
+            // session re-reads /v1/auth/me so every gate updates while open.
+            "access" -> onAccess()
+            // A released app version was turned on/off: re-check this build's gate.
+            "version" -> onVersion()
             "session_end" -> onSessionEnd(data.str("message").ifBlank { data.str("reason") })
+            // A gift reached me / left me: the engine's per-user frame with
+            // the new day totals, so statements move without a re-read.
+            "gift_received", "gift_sent" -> onGifting(GiftingUserEvent.from(name, data))
             // Chat rides the same connection: one socket per device.
             else -> when {
                 name.startsWith("chat_") -> onChat(name, data)

@@ -153,16 +153,94 @@ struct LiveRoomData: Decodable, Equatable {
     }
 }
 
+/// The verified-time HUD contract, carried on start and on every host /
+/// co-host heartbeat. The device shows this and only this: `verifiedMs` is
+/// the ledger's figure as of `serverNowMs`; the screen advances it locally
+/// while `counting` and stops once the last ack is older than
+/// `allowanceSeconds` — exactly when the server stops too.
+struct LiveTimeView: Decodable, Equatable {
+    var verifiedMs: Int64 = 0
+    var counting = false
+    var pausedMs: Int64 = 0
+    var segmentNo = 0
+    var serverNowMs: Int64 = 0
+    var allowanceSeconds = 30
+    private enum CodingKeys: String, CodingKey { case verifiedMs, counting, pausedMs, segmentNo, serverNowMs, allowanceSeconds }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        verifiedMs = c.int64(.verifiedMs); counting = c.bool(.counting); pausedMs = c.int64(.pausedMs)
+        segmentNo = Int(c.int64(.segmentNo)); serverNowMs = c.int64(.serverNowMs)
+        let a = Int(c.int64(.allowanceSeconds)); allowanceSeconds = a > 0 ? a : 30
+    }
+}
+
+/// The host's end card: the server's clock and counters, never the phone's.
+struct LiveSummaryData: Decodable, Equatable {
+    var roomId: Int64 = 0
+    var durationSeconds = 0
+    var peakViewers = 0
+    var totalJoins = 0
+    var uniqueViewers = 0
+    var reason = ""
+    var giftCoins: Int64 = 0
+    var giftCount = 0
+    /// The ledger's number for this room — what the host is credited. Wall
+    /// time (`durationSeconds`) may be larger: silence inside the room
+    /// (`pausedMs`) is never counted. -1 when the server did not answer.
+    var verifiedMs: Int64 = -1
+    var pausedMs: Int64 = 0
+    /// The host's accounting-day total after this room; -1 when unknown.
+    var todayMs: Int64 = -1
+    private enum CodingKeys: String, CodingKey {
+        case roomId, durationSeconds, peakViewers, totalJoins, uniqueViewers, reason, giftCoins, giftCount, verifiedMs, pausedMs, todayMs
+    }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        roomId = c.wireId(.roomId); durationSeconds = Int(c.int64(.durationSeconds))
+        peakViewers = Int(c.int64(.peakViewers)); totalJoins = Int(c.int64(.totalJoins)); uniqueViewers = Int(c.int64(.uniqueViewers))
+        reason = c.str(.reason); giftCoins = c.int64(.giftCoins); giftCount = Int(c.int64(.giftCount))
+        verifiedMs = c.contains(.verifiedMs) ? c.int64(.verifiedMs) : -1
+        pausedMs = c.int64(.pausedMs)
+        todayMs = c.contains(.todayMs) ? c.int64(.todayMs) : -1
+    }
+}
+
 struct LiveStartData: Decodable {
     var room = LiveRoomData()
     var sfu: RoomJoinData?
     var hlsUrl = ""
-    private enum CodingKeys: String, CodingKey { case room, sfu, hlsUrl }
+    var reconnectGraceSeconds = 180
+    var heartbeatSeconds = 15
+    /// The HUD's starting point: the ledger's zero, or its figure on a resume.
+    var time: LiveTimeView?
+    /// The same go-live (client_id) was already open; this is that room, not a new one.
+    var resumed = false
+    private enum CodingKeys: String, CodingKey { case room, sfu, hlsUrl, reconnectGraceSeconds, heartbeatSeconds, time, resumed }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         room = (try? c.decodeIfPresent(LiveRoomData.self, forKey: .room)) ?? LiveRoomData()
         sfu = try? c.decodeIfPresent(RoomJoinData.self, forKey: .sfu)
         hlsUrl = c.str(.hlsUrl)
+        let g = Int(c.int64(.reconnectGraceSeconds)); reconnectGraceSeconds = g > 0 ? g : 180
+        let h = Int(c.int64(.heartbeatSeconds)); heartbeatSeconds = h > 0 ? h : 15
+        time = try? c.decodeIfPresent(LiveTimeView.self, forKey: .time)
+        resumed = c.bool(.resumed)
+    }
+}
+
+struct LiveHeartbeatData: Decodable {
+    var room = LiveRoomData()
+    var live = false
+    /// Host / co-host: the ledger's running figure. Nil for viewers.
+    var time: LiveTimeView?
+    private enum CodingKeys: String, CodingKey { case room, live, time }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        room = (try? c.decodeIfPresent(LiveRoomData.self, forKey: .room)) ?? LiveRoomData()
+        live = c.bool(.live)
+        time = try? c.decodeIfPresent(LiveTimeView.self, forKey: .time)
     }
 }
 
@@ -320,8 +398,22 @@ struct CallApi {
 
     // MARK: live
 
-    func liveStart(kind: String, title: String) async -> ApiResponse<LiveStartData> {
-        await api.post("/v1/live/rooms", body: ["kind": kind, "title": title], authenticated: true, as: LiveStartData.self)
+    /// `clientId` is this device's key for one go-live: a retry after a
+    /// transport failure sends the same key and gets the same room back, so
+    /// the time already verified is kept rather than restarted.
+    func liveStart(kind: String, title: String, seats: Int = 0, clientId: String = "") async -> ApiResponse<LiveStartData> {
+        var body: [String: Any] = ["kind": kind, "title": title]
+        if kind == "audio" {
+            body["seats"] = max(2, min(45, seats))
+        }
+        if !clientId.isEmpty { body["client_id"] = clientId }
+        return await api.post("/v1/live/rooms", body: body, authenticated: true, as: LiveStartData.self)
+    }
+
+    /// Presence + clock sync. The reply carries `live=false` once the server
+    /// ended the room, and the verified-time figure for hosts and co-hosts.
+    func liveHeartbeat(_ roomId: Int64, mode: String) async -> ApiResponse<LiveHeartbeatData> {
+        await api.post("/v1/live/rooms/\(roomId)/heartbeat", body: ["mode": mode], authenticated: true, as: LiveHeartbeatData.self)
     }
 
     func liveOpen(limit: Int = 50) async -> ApiResponse<[LiveRoomData]> {
@@ -341,9 +433,20 @@ struct CallApi {
         await api.post("/v1/live/rooms/\(roomId)/leave", body: ["mode": mode], authenticated: true)
     }
 
+    /// Host ends the room. `reason`: host_ended · lost · background · battery ·
+    /// app_closed — it labels the record; the server bounds the time itself.
     @discardableResult
-    func liveEnd(_ roomId: Int64) async -> ApiResponse<EmptyPayload> {
-        await api.post("/v1/live/rooms/\(roomId)/end", body: [:], authenticated: true)
+    func liveEnd(_ roomId: Int64, reason: String = "host_ended") async -> ApiResponse<LiveSummaryData> {
+        struct Envelope: Decodable {
+            var summary = LiveSummaryData()
+            private enum CodingKeys: String, CodingKey { case summary }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                summary = (try? c.decodeIfPresent(LiveSummaryData.self, forKey: .summary)) ?? LiveSummaryData()
+            }
+        }
+        let r: ApiResponse<Envelope> = await api.post("/v1/live/rooms/\(roomId)/end", body: ["reason": reason], authenticated: true, as: Envelope.self)
+        return r.map(\.summary)
     }
 
     @discardableResult

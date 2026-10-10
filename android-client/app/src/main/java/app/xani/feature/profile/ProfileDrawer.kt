@@ -1,10 +1,11 @@
 package app.xani.feature.profile
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,13 +24,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import app.xani.core.net.AppGate
+import app.xani.core.net.Xani
 import app.xani.i18n.Copy
 import app.xani.ui.brand.LocalBrand
 import app.xani.ui.components.XaniMark
@@ -46,25 +58,37 @@ internal fun ProfileDrawer(
     onClose: () -> Unit,
     onSettings: () -> Unit,
     onAction: (String) -> Unit,
+    onCopied: () -> Unit = {},
 ) {
-    if (!visible) return
-    BackHandler(onBack = onClose)
-    val slide by animateFloatAsState(
-        targetValue = if (visible) 0f else 1f,
-        animationSpec = tween(320, easing = FastOutSlowInEasing),
-        label = "drawer",
-    )
-    val scrim by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(300),
-        label = "scrim",
-    )
+    // slide: 1 = parked off-screen right, 0 = open. Driven by [visible] so the
+    // panel animates both in and out; the composable stays mounted until the
+    // close animation has finished rather than vanishing on the first frame.
+    val slide = remember { Animatable(if (visible) 0f else 1f) }
+    // drag: how far the finger has pulled the open panel back to the right.
+    val drag = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(visible) {
+        if (visible) {
+            drag.snapTo(0f)
+            slide.animateTo(0f, tween(320, easing = FastOutSlowInEasing))
+        } else {
+            slide.animateTo(1f, tween(260, easing = FastOutSlowInEasing))
+            drag.snapTo(0f)
+        }
+    }
+    if (!visible && slide.value >= 0.999f) return
+    if (visible) BackHandler(onBack = onClose)
+
+    var panelWidth by remember { mutableFloatStateOf(0f) }
+    // How much of the panel is showing, 0..1, counting both the slide and the
+    // finger drag: the scrim fades with it so the two never disagree.
+    val shown = ((1f - slide.value) * (1f - (if (panelWidth > 0f) drag.value / panelWidth else 0f))).coerceIn(0f, 1f)
     val brand = LocalBrand.current
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(ProfileTokens.Scrim.copy(alpha = 0.4f * scrim))
+                .background(ProfileTokens.Scrim.copy(alpha = 0.4f * shown))
                 .pressable(onClick = onClose),
         )
         Column(
@@ -72,8 +96,40 @@ internal fun ProfileDrawer(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .fillMaxWidth(0.78f)
-                .graphicsLayer { translationX = size.width * slide }
+                .onSizeChanged { panelWidth = it.width.toFloat() }
+                .graphicsLayer { translationX = size.width * slide.value + drag.value }
                 .background(Color.White)
+                // Pull right to close: the panel follows the finger; past a
+                // third of its width (or a quick flick) it goes, otherwise it
+                // springs back. Rows underneath still take taps because a tap
+                // never crosses the drag slop.
+                .pointerInput(visible) {
+                    if (!visible) return@pointerInput
+                    val tracker = VelocityTracker()
+                    detectHorizontalDragGestures(
+                        onDragStart = { tracker.resetTracking() },
+                        onHorizontalDrag = { change, delta ->
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            val next = (drag.value + delta).coerceAtLeast(0f)
+                            if (next != drag.value) {
+                                change.consume()
+                                scope.launch { drag.snapTo(next) }
+                            }
+                        },
+                        onDragEnd = {
+                            val fling = tracker.calculateVelocity().x
+                            val w = panelWidth.takeIf { it > 0f } ?: size.width.toFloat()
+                            if (drag.value > w * 0.33f || fling > 1_200f) {
+                                onClose()
+                            } else {
+                                scope.launch { drag.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) }
+                            }
+                        },
+                        onDragCancel = {
+                            scope.launch { drag.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) }
+                        },
+                    )
+                }
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {
@@ -94,6 +150,12 @@ internal fun ProfileDrawer(
                 Column(Modifier.weight(1f)) {
                     XaniText(snapshot.displayName, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 15f)
                     XaniText("@${snapshot.username}", Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 12f)
+                    CopyableUserId(
+                        copy = copy,
+                        userId = ProfileStore.currentUserId,
+                        onCopied = onCopied,
+                        modifier = Modifier.padding(top = rdp(6)),
+                    )
                 }
                 Box(
                     Modifier
@@ -111,40 +173,43 @@ internal fun ProfileDrawer(
                     .padding(bottom = rdp(32)),
             ) {
                 SectionLabel(copy.t(Copy.ProfileDrawerAccount))
-                DrawerRow(copy.t(Copy.ProfileBalance), copy.t(Copy.ProfileCoins).let { "${snapshot.balanceCoins} coins" }, onClick = { onAction("balance") }) {
+                DrawerRow(copy.t(Copy.ProfileBalance), "${snapshot.balanceCoins} " + copy.t(Copy.ProfileCoins), onClick = { onAction("balance") }) {
                     ProfileIco.Path("M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z", Color(0xFF555555))
                 }
-                DrawerRow(copy.t(Copy.ProfileWallet), onClick = { onAction("wallet") }) {
-                    ProfileIco.Path("M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z", Color(0xFF555555))
+                DrawerRow(copy.t(Copy.BalanceRecharge), onClick = { onAction("recharge") }) {
+                    ProfileIco.Path("M12 4v16m8-8H4", Color(0xFF555555))
+                }
+                // Coin sellers: one cheap read decides both rows — the public
+                // list for everyone while the feature is on, the hub only for
+                // accounts holding a seller role.
+                var sellerMe by remember { androidx.compose.runtime.mutableStateOf<app.xani.core.net.SellerMeData?>(null) }
+                LaunchedEffect(Unit) { sellerMe = Xani.sellers.me().value }
+                if (sellerMe?.sellersEnabled == true) {
+                    DrawerRow(copy.t(Copy.SellerDrawerList), onClick = { onAction("coin_sellers") }) {
+                        ProfileIco.Path("M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z", Color(0xFF555555))
+                    }
+                }
+                if (sellerMe?.isSeller == true) {
+                    DrawerRow(copy.t(Copy.SellerDrawerHub), copy.t(Copy.SellerTabSend), iconTint = ProfileTokens.Accent, iconBg = ProfileTokens.AccentSoft, onClick = { onAction("seller_hub") }) {
+                        ProfileIco.Path("M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z", ProfileTokens.Accent)
+                    }
                 }
                 DrawerRow(copy.t(Copy.ProfileDiamonds), snapshot.diamonds, onClick = { onAction("diamonds") }) {
                     ProfileIco.Diamond(Color(0xFF555555), rdp(18))
                 }
-                DrawerRow(copy.t(Copy.StoreTitle), onClick = { onAction("frames") }) {
-                    ProfileIco.Store(Color(0xFF555555), rdp(18))
-                }
-                DrawerRow(copy.t(Copy.GiftRecordTitle), onClick = { onAction("gifting") }) {
-                    // A wrapped gift box: lid, ribbon, body.
-                    ProfileIco.Path("M20 12v10H4V12M2 7h20v5H2zM12 22V7m0 0H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7zm0 0h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z", Color(0xFF555555))
-                }
                 DrawerRow(copy.t(Copy.ProfileTxnHistory), onClick = { onAction("txn") }) {
-                    ProfileIco.Path("M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", Color(0xFF555555))
+                    ProfileIco.Receipt(Color(0xFF555555), rdp(18))
                 }
-                DrawerRow(copy.t(Copy.RolesTitle), onClick = { onAction("roles") }) {
-                    // Org chart: one node over two.
-                    ProfileIco.Path("M12 3v5m0 0H7a2 2 0 00-2 2v2m7-4h5a2 2 0 012 2v2M5 12v3m14-3v3M3 15h4v6H3zm14 0h4v6h-4zM10 15h4v6h-4zM12 12v3", Color(0xFF555555))
-                }
-
-                Box(Modifier.fillMaxWidth().padding(top = rdp(4)).height(rdp(1)).background(ProfileTokens.RowLine))
-                SectionLabel(copy.t(Copy.ProfileDrawerCreator))
-                DrawerRow(copy.t(Copy.ProfileCreatorTools), iconTint = ProfileTokens.Accent, iconBg = ProfileTokens.AccentSoft, onClick = { onAction("creator") }) {
-                    ProfileIco.Path("M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7", ProfileTokens.Accent)
-                }
-                DrawerRow(copy.t(Copy.ProfileAnalytics), iconTint = ProfileTokens.Accent, iconBg = ProfileTokens.AccentSoft, onClick = { onAction("analytics") }) {
-                    ProfileIco.Path("M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z", ProfileTokens.Accent)
-                }
-                DrawerRow(copy.t(Copy.ProfileLiveCenter), iconTint = ProfileTokens.Accent, iconBg = ProfileTokens.AccentSoft, onClick = { onAction("live") }) {
-                    ProfileIco.Path("M15 10l4.553-2.069A1 1 0 0121 8.845v6.31a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z", ProfileTokens.Accent)
+                // Wallet / Coins, Gifting record, My roles, My Live and My Rewards
+                // sit on the profile itself now (the shortcut boxes under the
+                // store row), so they are not repeated here.
+                // The in-app moderation screen, only for accounts whose role (or
+                // direct grant) carries it. The server enforces regardless.
+                if (Xani.session.can("mod.app_users") || Xani.session.can("screen.capture.manage")) {
+                    DrawerRow(copy.t(Copy.ModTitle), onClick = { onAction("moderation") }) {
+                        // Shield with a check: moderation.
+                        ProfileIco.Path("M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z", Color(0xFF555555))
+                    }
                 }
 
                 Box(Modifier.fillMaxWidth().padding(top = rdp(4)).height(rdp(1)).background(ProfileTokens.RowLine))
@@ -192,7 +257,7 @@ internal fun ProfileDrawer(
 
             Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Hairline))
             XaniText(
-                copy.t(Copy.ProfileVersion, "app" to brand.wordmark.lowercase()),
+                copy.t(Copy.ProfileVersion, "app" to brand.name, "version" to AppGate.version),
                 Type.Micro,
                 color = Color(0xFFCCCCCC),
                 fontSizeOverride = 11f,

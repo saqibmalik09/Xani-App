@@ -63,8 +63,11 @@ internal fun ProfileStatsScreen(
     val title = when (kind) {
         ProfileStatsKind.Following -> copy.t(Copy.ProfileFollowing)
         ProfileStatsKind.Followers -> copy.t(Copy.ProfileFollowers)
+        ProfileStatsKind.Sending -> copy.t(Copy.ProfileSending)
         ProfileStatsKind.Receiving -> copy.t(Copy.ProfileReceiving)
     }
+    // Gifting is a flow over a window; the follow graph is a list of people.
+    val gifting = kind == ProfileStatsKind.Sending || kind == ProfileStatsKind.Receiving
     Column(
         Modifier
             .fillMaxSize()
@@ -91,7 +94,7 @@ internal fun ProfileStatsScreen(
         }
         Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Border))
 
-        if (kind == ProfileStatsKind.Receiving) {
+        if (gifting) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -110,8 +113,8 @@ internal fun ProfileStatsScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
         ) {
-            if (kind == ProfileStatsKind.Receiving) {
-                ReceivingPane(copy, period)
+            if (gifting) {
+                GiftFlowPane(copy, period, sent = kind == ProfileStatsKind.Sending)
             } else {
                 PeopleList(copy, kind)
             }
@@ -121,27 +124,35 @@ internal fun ProfileStatsScreen(
 }
 
 /**
- * What gifting actually brought in over the chosen window, and who sent it.
+ * What gifting moved over the chosen window, and who it moved with: the people
+ * this account sent to, or the people it took in from.
  *
- * One read per period against the statement endpoint — the same numbers the
- * transaction history shows, folded by sender and already ordered biggest
- * first, so nothing here recomputes a total the ledger already knows.
+ * One read per window against the statement endpoint — the same numbers the
+ * transaction history shows, folded by person and already ordered biggest
+ * first, so nothing here recomputes a total the ledger already knows. The last
+ * answer for each window is kept, so coming back paints at once and re-reads
+ * behind what is already on screen.
  */
 @Composable
-private fun ReceivingPane(copy: Copy, period: ReceivingPeriod) {
-    var data by remember { mutableStateOf<TxnGiftGroupsData?>(null) }
-    var loading by remember { mutableStateOf(false) }
+private fun GiftFlowPane(copy: Copy, period: ReceivingPeriod, sent: Boolean) {
+    val key = "$sent/$period"
+    var data by remember(key) { mutableStateOf(GiftFlowCache[key]) }
+    var loading by remember(key) { mutableStateOf(false) }
 
-    LaunchedEffect(period) {
+    LaunchedEffect(key) {
         val today = LocalDate.now()
         val from = when (period) {
             ReceivingPeriod.Daily -> today
             ReceivingPeriod.Weekly -> today.with(DayOfWeek.MONDAY)
             ReceivingPeriod.Monthly -> today.withDayOfMonth(1)
         }
-        loading = true
-        val got = Xani.wallet.giftGroups(from.format(IsoDay), today.format(IsoDay), sent = false).value
-        if (got != null) data = got
+        // Only a window with nothing to show waits visibly.
+        loading = data == null
+        val got = Xani.wallet.giftGroups(from.format(IsoDay), today.format(IsoDay), sent = sent).value
+        if (got != null) {
+            data = got
+            GiftFlowCache[key] = got
+        }
         loading = false
     }
 
@@ -155,8 +166,12 @@ private fun ReceivingPane(copy: Copy, period: ReceivingPeriod) {
             .background(ProfileTokens.ReceivingWash)
             .padding(rdp(16)),
     ) {
-        SummaryCell(compact(totals?.diamonds ?: 0L), copy.t(Copy.ProfileDiamonds)) {
-            ProfileIco.Diamond(ProfileTokens.AccentDeep, rdp(22))
+        // Diamonds are what a gift earns, so they belong to the receiving side
+        // only; spend is coins.
+        if (!sent) {
+            SummaryCell(compact(totals?.diamonds ?: 0L), copy.t(Copy.ProfileDiamonds)) {
+                ProfileIco.Diamond(ProfileTokens.AccentDeep, rdp(22))
+            }
         }
         SummaryCell(compact(totals?.coins ?: 0L), copy.t(Copy.ProfileCoins)) {
             ProfileIco.Coin(ProfileTokens.AccentDeep, rdp(22))
@@ -170,21 +185,21 @@ private fun ReceivingPane(copy: Copy, period: ReceivingPeriod) {
         }
     }
     XaniText(
-        copy.t(Copy.ProfileTopSenders),
+        copy.t(if (sent) Copy.ProfileTopRecipients else Copy.ProfileTopSenders),
         Type.LabelBold,
         color = ProfileTokens.Sub,
         fontSizeOverride = 13f,
         modifier = Modifier.padding(horizontal = rdp(20)).padding(bottom = rdp(10)),
     )
-    val senders = data?.items.orEmpty().take(10)
+    val people = data?.items.orEmpty().take(10)
     when {
-        loading && senders.isEmpty() -> Box(
+        loading && people.isEmpty() -> Box(
             Modifier.fillMaxWidth().padding(rdp(24)),
             contentAlignment = Alignment.Center,
         ) { Spinner(rdp(20), ProfileTokens.Accent) }
 
-        senders.isEmpty() -> XaniText(
-            copy.t(Copy.ProfileReceivingEmpty),
+        people.isEmpty() -> XaniText(
+            copy.t(if (sent) Copy.ProfileSendingEmpty else Copy.ProfileReceivingEmpty),
             Type.Caption,
             color = ProfileTokens.Muted,
             fontSizeOverride = 14f,
@@ -192,12 +207,26 @@ private fun ReceivingPane(copy: Copy, period: ReceivingPeriod) {
             align = androidx.compose.ui.text.style.TextAlign.Center,
         )
 
-        else -> senders.forEachIndexed { i, g ->
-            SenderRow(g, i + 1)
-            if (i < senders.lastIndex) {
+        else -> people.forEachIndexed { i, g ->
+            SenderRow(g, i + 1, sent)
+            if (i < people.lastIndex) {
                 Box(Modifier.fillMaxWidth().padding(horizontal = rdp(20)).height(rdp(1)).background(ProfileTokens.Border))
             }
         }
+    }
+}
+
+/**
+ * The last answer per window, for the life of the process. Gifting totals for a
+ * window that has already been read are worth showing instantly: the screen is
+ * opened, closed and opened again, and a spinner each time reads as the app
+ * having forgotten.
+ */
+private object GiftFlowCache {
+    private val map = java.util.concurrent.ConcurrentHashMap<String, TxnGiftGroupsData>()
+    operator fun get(key: String): TxnGiftGroupsData? = map[key]
+    operator fun set(key: String, value: TxnGiftGroupsData) {
+        map[key] = value
     }
 }
 
@@ -287,7 +316,7 @@ private fun PeriodChip(modifier: Modifier, label: String, on: Boolean, onClick: 
 }
 
 @Composable
-private fun SenderRow(group: TxnGiftGroupData, rank: Int) {
+private fun SenderRow(group: TxnGiftGroupData, rank: Int, sent: Boolean) {
     val person = group.user
     val name = person.fullName.ifBlank { person.username }
     Row(
@@ -312,17 +341,27 @@ private fun SenderRow(group: TxnGiftGroupData, rank: Int) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(rdp(6))) {
                 XaniText(name, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 14f, maxLines = 1)
-                LevelMark(person.senderLevel, rdp(15))
+                // Who they are in this flow: a recipient wears their receiver
+                // level, a sender their sender level.
+                LevelMark(if (sent) person.receiverLevel else person.senderLevel, rdp(15))
             }
             if (person.username.isNotBlank()) {
                 XaniText("@${person.username}", Type.Micro, color = ProfileTokens.Sub, fontSizeOverride = 11f, maxLines = 1)
             }
         }
         Column(horizontalAlignment = Alignment.End) {
+            // Sending is spend, so it is counted in coins; receiving is earnings,
+            // counted in diamonds. Same convention as the statement.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ProfileIco.Diamond(ProfileTokens.AccentDeep, rdp(14))
+                if (sent) ProfileIco.Coin(ProfileTokens.AccentDeep, rdp(14))
+                else ProfileIco.Diamond(ProfileTokens.AccentDeep, rdp(14))
                 Spacer(Modifier.width(rdp(4)))
-                XaniText(compact(group.diamonds), Type.LabelBold, color = ProfileTokens.AccentDeep, fontSizeOverride = 14f)
+                XaniText(
+                    compact(if (sent) group.coins else group.diamonds),
+                    Type.LabelBold,
+                    color = ProfileTokens.AccentDeep,
+                    fontSizeOverride = 14f,
+                )
             }
             XaniText(compact(group.count), Type.Micro, color = ProfileTokens.Sub, fontSizeOverride = 10f)
         }

@@ -167,6 +167,11 @@ struct ChatThreadView: View {
                                     if msg.kind == .poll { return }
                                     if msg.kind == .event { editEvent = msg; return }
                                     if msg.kind == .location { openMaps(msg.text); return }
+                                    if msg.kind == .voice {
+                                        VoicePlayer.shared.toggle(msgId: msg.id, url: msg.mediaURL)
+                                        return
+                                    }
+                                    if msg.kind == .system, parseCallMsg(msg.text) != nil { return }
                                     flashId = msg.id
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.52) { flashId = NoMsg }
                                 }
@@ -546,12 +551,13 @@ struct ChatThreadView: View {
                 .frame(width: 200 * scale, height: 140 * scale)
                 .clipShape(RoundedRectangle(cornerRadius: 10 * scale))
         case .voice:
-            HStack(spacing: 8 * scale) {
-                Circle().fill(msg.mine ? Color.white.opacity(0.22) : Color.white).frame(width: 36 * scale, height: 36 * scale)
-                    .overlay(ChatIco.play(msg.mine ? .white : Color(rgb: 0x111111), side: 14 * scale))
-                AppText(msg.text.isEmpty ? "0:07" : msg.text, style: Type.micro, color: color, sizeOverride: 11)
+            VoiceChip(msg: msg, color: color)
+        case .system:
+            if let call = parseCallMsg(msg.text) {
+                CallChip(call: call, color: color)
+            } else {
+                AppText(msg.text, style: Type.label, color: color)
             }
-            .frame(width: 220 * scale, alignment: .leading)
         case .contact:
             VStack(alignment: .leading, spacing: 8 * scale) {
                 HStack(spacing: 10 * scale) {
@@ -1107,4 +1113,64 @@ func initials(_ text: String, color: UInt32, group: Bool, size: CGFloat) -> some
         .frame(width: size, height: size)
         .background(Color(rgb: color))
         .clipShape(RoundedRectangle(cornerRadius: group ? size * 0.3 : size / 2, style: .continuous))
+}
+
+private struct VoiceChip: View {
+    let msg: ChatMessage
+    let color: Color
+    @Environment(\.uiScale) private var scale
+    @ObservedObject private var player = VoicePlayer.shared
+
+    var body: some View {
+        let playing = player.playingId == msg.id
+        HStack(spacing: 8 * scale) {
+            Circle()
+                .fill(msg.mine ? Color.white.opacity(0.22) : Color.white)
+                .frame(width: 36 * scale, height: 36 * scale)
+                .overlay {
+                    if playing {
+                        HStack(spacing: 3 * scale) {
+                            Capsule().fill(msg.mine ? Color.white : Color(rgb: 0x111111)).frame(width: 3 * scale, height: 12 * scale)
+                            Capsule().fill(msg.mine ? Color.white : Color(rgb: 0x111111)).frame(width: 3 * scale, height: 12 * scale)
+                        }
+                    } else {
+                        ChatIco.play(msg.mine ? .white : Color(rgb: 0x111111), side: 14 * scale)
+                    }
+                }
+            AppText(msg.text.isEmpty ? "0:07" : msg.text, style: Type.micro, color: color, sizeOverride: 11)
+        }
+        .frame(width: 220 * scale, alignment: .leading)
+    }
+}
+
+private struct CallChip: View {
+    let call: CallMsg
+    let color: Color
+    @Environment(\.uiScale) private var scale
+
+    var body: some View {
+        let label = call.video ? "Video call" : "Voice call"
+        let status: String = {
+            switch call.status {
+            case "ongoing": return Copy.t(.callOngoing)
+            case "declined": return Copy.t(.callDeclined)
+            case "missed": return Copy.t(.callMissed)
+            case "cancelled": return Copy.t(.callEnded)
+            case "busy": return Copy.t(.callBusy)
+            default:
+                return call.durationSec > 0 ? formatCallClock(call.durationSec) : Copy.t(.callEnded)
+            }
+        }()
+        HStack(spacing: 10 * scale) {
+            Circle()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 36 * scale, height: 36 * scale)
+                .overlay(AppText(call.video ? "📹" : "📞", style: Type.label, sizeOverride: 14))
+            VStack(alignment: .leading, spacing: 2 * scale) {
+                AppText(label, style: Type.labelBold, color: color, sizeOverride: 13)
+                AppText(status, style: Type.micro, color: color.opacity(0.8), sizeOverride: 11)
+            }
+        }
+        .frame(maxWidth: 220 * scale, alignment: .leading)
+    }
 }

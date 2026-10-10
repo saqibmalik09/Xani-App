@@ -83,7 +83,7 @@ fun DynamicForm(
                         imeAction = ImeAction.Next,
                         maxChars = 24,
                     )
-                    FormFieldType.PHONE -> LightField(
+                    FormFieldType.PHONE, FormFieldType.WHATSAPP -> LightField(
                         value = value,
                         onValueChange = { onChange(f.key, it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' || ch == '-' || ch == '(' || ch == ')' }) },
                         placeholder = f.hint.ifBlank { copy.t(Copy.RolesFormPhoneHint) },
@@ -114,7 +114,7 @@ fun DynamicForm(
                 val err = errors[f.key]
                 when {
                     err != null -> XaniText(err, Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(6)))
-                    f.hint.isNotBlank() && f.type != FormFieldType.TEXT && f.type != FormFieldType.TEXTAREA && f.type != FormFieldType.NUMBER && f.type != FormFieldType.PHONE ->
+                    f.hint.isNotBlank() && f.type != FormFieldType.TEXT && f.type != FormFieldType.TEXTAREA && f.type != FormFieldType.NUMBER && f.type != FormFieldType.PHONE && f.type != FormFieldType.WHATSAPP ->
                         XaniText(f.hint, Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(6)))
                 }
             }
@@ -131,6 +131,10 @@ fun validateAnswers(copy: Copy, fields: List<FormFieldData>, values: Map<String,
             if (f.required) out[f.key] = copy.t(Copy.RolesFormRequired)
             continue
         }
+        if (phoneLike(f)) {
+            if (normalizePhone(v) == null) out[f.key] = copy.t(Copy.RolesFormPhoneHint)
+            continue
+        }
         when (f.type) {
             FormFieldType.TEXT, FormFieldType.TEXTAREA -> {
                 val min = f.min?.toInt()
@@ -145,11 +149,38 @@ fun validateAnswers(copy: Copy, fields: List<FormFieldData>, values: Map<String,
                 else if (f.max != null && n > f.max) out[f.key] = copy.t(Copy.RolesFormMax, "n" to trim(f.max))
             }
             FormFieldType.DROPDOWN -> if (v !in f.options) out[f.key] = copy.t(Copy.RolesFormChoose)
-            FormFieldType.PHONE -> if (!Regex("^\\+?[0-9][0-9 ()-]{5,19}$").matches(v)) out[f.key] = copy.t(Copy.RolesFormPhoneHint)
             FormFieldType.COUNTRY -> if (!Regex("^[A-Za-z]{2}$").matches(v)) out[f.key] = copy.t(Copy.RolesFormChooseCountry)
         }
     }
     return out
+}
+
+private fun phoneLike(f: FormFieldData): Boolean {
+    when (f.type) {
+        FormFieldType.PHONE, FormFieldType.WHATSAPP -> return true
+    }
+    val k = f.key.lowercase()
+    if (k in setOf("phone", "mobile", "whatsapp", "wa", "tel", "cellphone", "cell")) return true
+    if (k.contains("whatsapp") || k.contains("phone") || k.endsWith("_wa")) return true
+    val label = f.label.lowercase()
+    return label.contains("whatsapp") || label.contains("wa number")
+}
+
+/** Compact E.164-ish phone; null when invalid (rejects junk like "84937)"). */
+fun normalizePhone(raw: String): String? {
+    val s = raw.trim()
+    if (s.isEmpty()) return null
+    val b = StringBuilder()
+    for (i in s.indices) {
+        when (val ch = s[i]) {
+            '+' -> if (i == 0 && b.isEmpty()) b.append('+') else return null
+            in '0'..'9' -> b.append(ch)
+            ' ', '-', '(', ')', '.', '\u00a0' -> Unit
+            else -> return null
+        }
+    }
+    val out = b.toString()
+    return if (Regex("^\\+?[1-9]\\d{6,14}$").matches(out)) out else null
 }
 
 private fun trim(d: Double): String = if (d == Math.floor(d)) d.toLong().toString() else d.toString()

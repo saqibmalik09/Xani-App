@@ -121,7 +121,7 @@ fun MyAvatar(
             contentAlignment = Alignment.Center,
         ) {
             val preview = upload.preview
-            val stored = MediaConfig.url(profile.avatarUrl.ifEmpty { null })
+            val stored = MediaConfig.avatarUrl(profile.avatarUrl)
             when {
                 preview != null -> Image(
                     bitmap = preview.asImageBitmap(),

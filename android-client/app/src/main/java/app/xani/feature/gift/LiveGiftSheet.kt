@@ -56,7 +56,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.xani.core.isolate.runFeature
 import app.xani.core.media.RemoteImage
+import app.xani.core.net.GiftCategoryNode
 import app.xani.core.net.GiftData
+import app.xani.core.net.GiftLeafData
+import app.xani.core.net.GiftLockState
+import app.xani.core.net.GiftTreeData
 import app.xani.core.net.LivePersonData
 import app.xani.core.net.PkData
 import app.xani.core.net.StageData
@@ -80,6 +84,12 @@ import java.util.Locale
 /**
  * The gift sheet: who to send to (host first, selected), categories, the
  * grid, and a bar with the sender's coins bottom-left and Send bottom-right.
+ *
+ * The receiver row is a multi-select: tapping avatars adds or removes people
+ * (at least one always stays). Every selected person receives their own copy
+ * of the gift — their own ledger row and split on the server — and one tap
+ * costs price × receivers; the sum sits next to Send before it is spent. The
+ * whole bundle is one request and ONE animation for the room.
  *
  * Send is optimistic: the tap plays the gift and drops the coin pill by the
  * price at once; the server's balance replaces the pill on reply and a refusal
@@ -124,10 +134,27 @@ internal fun LiveGiftSheet(
         (pkPeople + seated).distinctBy { it.id }
     }
     var people by remember(roomId) { mutableStateOf(stagePeople) }
-    var receiverId by remember(roomId) { mutableLongStateOf(if (receiverId > 0L) receiverId else hostId) }
+    // Multi-select: every chosen person receives their own copy of the gift
+    // and the sender pays for each. The host (or the seat that opened the
+    // sheet) starts selected; the last selection cannot be removed.
+    var selectedIds by remember(roomId) {
+        mutableStateOf(setOfNotNull((if (receiverId > 0L) receiverId else hostId).takeIf { it > 0L }))
+    }
     var categoryId by remember { mutableLongStateOf(0L) }
+    var subId by remember { mutableLongStateOf(0L) }
     var selectedId by remember { mutableLongStateOf(0L) }
     var loading by remember { mutableStateOf(catalog.categories.isEmpty()) }
+    // The engine's tree for this sender → receiver: sub-categories and each
+    // gift's lock state. Null until it lands (or when the engine is away), in
+    // which case the flat catalog below stands in and nothing is locked.
+    var tree by remember(roomId) { mutableStateOf<GiftTreeData?>(null) }
+    var treeSeq by remember { mutableIntStateOf(0) }
+    val roots: List<GiftCategoryNode> = remember(tree, catalog) {
+        tree?.categories ?: catalog.categories.map { c ->
+            GiftCategoryNode(c.id, 0L, c.title, c.lucky, c.gifts.map { GiftLeafData(it, GiftLockState.Open) }, emptyList())
+        }
+    }
+    val leaves: List<GiftLeafData> = remember(roots) { roots.flatMap { it.allGifts } }
     // A refusal is a modal over the sheet, never a line inside it.
     var dialog by remember { mutableStateOf<GiftDialog?>(null) }
 
@@ -165,20 +192,50 @@ internal fun LiveGiftSheet(
             val rest = items.filter { it.role != "host" && seen.add(it.id) }.sortedBy { if (it.role == "guest") 0 else 1 }
             val list = listOfNotNull(host) + seated + rest
             people = list
-            if (receiverId == 0L || list.none { it.id == receiverId }) {
-                receiverId = list.firstOrNull()?.id ?: 0L
-            }
+            // Anyone picked who has left drops out; the host (first) stands in
+            // when nothing of the selection survives.
+            val ids = list.mapTo(HashSet()) { it.id }
+            val kept = selectedIds.filterTo(LinkedHashSet()) { it in ids }
+            if (kept.isEmpty()) list.firstOrNull()?.let { kept.add(it.id) }
+            selectedIds = kept
         }
     }
-    // Auto-select: the first category and its first gift, once the catalog is here.
-    LaunchedEffect(catalog.rev, catalog.categories.size) {
-        if (catalog.categories.isEmpty()) return@LaunchedEffect
-        if (catalog.categories.none { it.id == categoryId }) categoryId = catalog.categories[0].id
-        val cat = catalog.categories.first { it.id == categoryId }
-        if (cat.gifts.none { it.id == selectedId }) selectedId = cat.gifts.firstOrNull()?.id ?: 0L
+    // The rule tree reads for one pairing; the host leads when selected,
+    // otherwise whoever comes first in the room order.
+    val primaryReceiver = remember(selectedIds, people, hostId) {
+        when {
+            hostId > 0L && hostId in selectedIds -> hostId
+            else -> people.firstOrNull { it.id in selectedIds }?.id ?: selectedIds.firstOrNull() ?: 0L
+        }
     }
-    LaunchedEffect(selectedId) {
-        catalog.all.firstOrNull { it.id == selectedId }?.let(GiftCatalogStore::warm)
+    // The rule-aware tree for the primary receiver. One read per receiver
+    // (and per explicit refresh after a refusal); the flat catalog keeps the
+    // sheet usable while it loads. A rule refusing one extra pairing in a
+    // multi-send is the server's call per copy — it never sinks the bundle.
+    LaunchedEffect(roomId, primaryReceiver, treeSeq) {
+        if (primaryReceiver == 0L) return@LaunchedEffect
+        val r = withContext(Dispatchers.IO) { runFeature(null) { Xani.gifting.catalog(roomId, primaryReceiver) } }
+        val got = r?.value
+        // Engine away or offline: keep whatever tree we had, or the flat catalog.
+        if (r?.ok == true && got != null) {
+            tree = got
+            loading = false
+        }
+    }
+    // Auto-select: the first category and its first sendable gift, once the
+    // tree (or the flat catalog) is here; keep the selection across reloads.
+    LaunchedEffect(roots) {
+        if (roots.isEmpty()) return@LaunchedEffect
+        if (roots.none { it.id == categoryId }) { categoryId = roots[0].id; subId = 0L }
+        val root = roots.first { it.id == categoryId }
+        if (subId != 0L && root.children.none { it.id == subId }) subId = 0L
+        val node = root.children.firstOrNull { it.id == subId } ?: root
+        val shown = node.allGifts
+        val cur = shown.firstOrNull { it.id == selectedId }
+        if (cur == null || !cur.state.allowed) selectedId = shown.firstOrNull { it.state.allowed }?.id ?: 0L
+    }
+    LaunchedEffect(selectedId, leaves) {
+        leaves.firstOrNull { it.id == selectedId }?.gift?.let(GiftCatalogStore::warm)
     }
     // Server replies settle the pending spend; refusals also explain themselves.
     LaunchedEffect(Unit) {
@@ -194,14 +251,21 @@ internal fun LiveGiftSheet(
                 if (pending.remove(f.clientId) != null) pendingTotal = pending.values.sum()
                 combo = 0
                 hidden = false // the refusal is read over the sheet, not over an empty room
-                val g = catalog.all.firstOrNull { it.id == selectedId }
-                dialog = when (f.code) {
-                    "insufficient_funds" -> {
+                val g = leaves.firstOrNull { it.id == selectedId }?.gift
+                dialog = when {
+                    f.code == "insufficient_funds" -> {
                         // The server's word on the balance beats ours: re-read it.
                         ProfileStore.refresh()
-                        GiftDialog.NotEnough(g?.title ?: "", g?.coinPrice ?: 0L)
+                        val n = selectedIds.size.coerceAtLeast(1)
+                        GiftDialog.NotEnough(g?.title ?: "", g?.coinPrice ?: 0L, (g?.coinPrice ?: 0L) * n, n)
                     }
-                    "too_fast" -> GiftDialog.Failed(copy.t(Copy.LiveGiftTooFast), retry = true)
+                    f.code == "too_fast" -> GiftDialog.Failed(copy.t(Copy.LiveGiftTooFast), retry = true)
+                    // A rule said no (gift_<REASON>): the message is the rule's
+                    // own English; the tree is re-read so the lock shows too.
+                    f.code.startsWith("gift_") -> {
+                        treeSeq++
+                        GiftDialog.Locked(f.message.ifBlank { copy.t(Copy.LiveGiftLockedTitle) })
+                    }
                     else -> GiftDialog.Failed(f.message.ifBlank { copy.t(Copy.LiveGiftFailed) }, retry = true)
                 }
             }
@@ -215,12 +279,13 @@ internal fun LiveGiftSheet(
     // dashboard lands here in realtime, mid-broadcast, no reopen needed.
     LaunchedEffect(Unit) { ProfileStore.observeLive() }
 
-    val selected = remember(selectedId, catalog) { catalog.all.firstOrNull { it.id == selectedId } }
+    val selectedLeaf = remember(selectedId, leaves) { leaves.firstOrNull { it.id == selectedId } }
+    val selected = selectedLeaf?.gift
     // Lucky is the category's flag from the dashboard (the server folds it into
     // the gift too). Only a lucky gift combos; everything else sends once.
-    val selectedLucky = remember(selected, catalog) {
+    val selectedLucky = remember(selected, roots) {
         val g = selected
-        g != null && (g.lucky || catalog.categories.firstOrNull { it.id == g.categoryId }?.lucky == true)
+        g != null && (g.lucky || roots.firstOrNull { it.id == g.categoryId }?.lucky == true)
     }
     // Reads the snapshot's exact number: a recharge landing on the wallet
     // stream recomposes this sheet, so the pill moves without reopening.
@@ -228,22 +293,32 @@ internal fun LiveGiftSheet(
 
     fun send() {
         val g = selected ?: return
-        if (receiverId == 0L) return
+        // Room order, so the first receiver (the frame old clients render) is
+        // the host whenever the host is picked.
+        val targets = people.map { it.id }.filter { it in selectedIds }.ifEmpty { selectedIds.toList() }
+        if (targets.isEmpty()) return
         if (dialog != null) return
+        // A locked gift never leaves the device; the reason is the rule's text.
+        selectedLeaf?.state?.takeIf { !it.allowed }?.let {
+            dialog = GiftDialog.Locked(it.text.ifBlank { copy.t(Copy.LiveGiftLockedTitle) })
+            return
+        }
+        // Every selected person gets their own copy: the tap costs the sum.
         val price = g.coinPrice
+        val required = price * targets.size
         // Refuse locally only on a balance the server has actually told us.
         // An unknown balance goes to the ledger, which is the only judge.
-        if (ProfileStore.balanceKnown && coins < price) {
+        if (ProfileStore.balanceKnown && coins < required) {
             combo = 0
             hidden = false
-            dialog = GiftDialog.NotEnough(g.title, price)
+            dialog = GiftDialog.NotEnough(g.title, price, required, targets.size)
             return
         }
         val lucky = selectedLucky
         val next = if (lucky && combo > 0 && comboGift == g.id) combo + 1 else 1
-        val clientId = LiveSession.sendGift(g, receiverId, combo = next) ?: return
-        pending[clientId] = price
-        pendingTotal += price
+        val clientId = LiveSession.sendGift(g, targets, combo = next) ?: return
+        pending[clientId] = required
+        pendingTotal += required
         // Out of the way: the sender sees the gift land like everyone else.
         hidden = true
         hiddenAt = System.currentTimeMillis()
@@ -280,22 +355,32 @@ internal fun LiveGiftSheet(
 
     Box(Modifier.fillMaxSize()) {
     LiveSheet(onClose = onClose, hidden = hidden) { _ ->
-            // Receivers: everyone in the room, host selected by default.
-            ReceiverRow(people, receiverId, copy) { receiverId = it }
+            // Receivers: everyone in the room, host selected by default. Tap
+            // toggles; at least one person always stays selected.
+            ReceiverRow(people, selectedIds, copy) { id ->
+                selectedIds = when {
+                    id in selectedIds && selectedIds.size == 1 -> selectedIds
+                    id in selectedIds -> selectedIds - id
+                    else -> selectedIds + id
+                }
+            }
 
-            // Categories
-            if (catalog.categories.isNotEmpty()) {
+            // Categories (top level)
+            val root = roots.firstOrNull { it.id == categoryId }
+            if (roots.isNotEmpty()) {
                 LazyRow(
                     Modifier.fillMaxWidth().padding(top = rdp(6)).then(LocalLiveSheetDrag.current),
                     contentPadding = PaddingValues(horizontal = rdp(14)),
                     horizontalArrangement = Arrangement.spacedBy(rdp(18)),
                 ) {
-                    items(catalog.categories, key = { it.id }) { c ->
+                    items(roots, key = { it.id }) { c ->
                         val on = c.id == categoryId
                         Column(
                             Modifier.pressable(pressedScale = 0.96f, onClick = {
                                 categoryId = c.id
-                                selectedId = c.gifts.firstOrNull()?.id ?: 0L
+                                subId = 0L
+                                selectedId = c.allGifts.firstOrNull { it.state.allowed }?.id ?: 0L
+                                combo = 0
                             }),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -317,13 +402,47 @@ internal fun LiveGiftSheet(
                     }
                 }
             }
+            // Sub-categories: a category inside a category, as small pills.
+            // "All" shows everything under the parent.
+            if (root != null && root.children.isNotEmpty()) {
+                LazyRow(
+                    Modifier.fillMaxWidth().padding(top = rdp(2), bottom = rdp(4)).then(LocalLiveSheetDrag.current),
+                    contentPadding = PaddingValues(horizontal = rdp(14)),
+                    horizontalArrangement = Arrangement.spacedBy(rdp(6)),
+                ) {
+                    items(listOf<GiftCategoryNode?>(null) + root.children, key = { it?.id ?: 0L }) { c ->
+                        val on = (c?.id ?: 0L) == subId
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(rdp(12)))
+                                .background(if (on) Color(0x338B5CF6) else Color.White.copy(alpha = 0.05f))
+                                .then(if (on) Modifier.border(1.dp, Color(0xFFA78BFA), RoundedCornerShape(rdp(12))) else Modifier)
+                                .pressable(pressedScale = 0.95f, onClick = {
+                                    subId = c?.id ?: 0L
+                                    val node = c ?: root
+                                    selectedId = node.allGifts.firstOrNull { it.state.allowed }?.id ?: 0L
+                                    combo = 0
+                                })
+                                .padding(horizontal = rdp(10), vertical = rdp(5)),
+                        ) {
+                            XaniText(
+                                c?.let { if (it.lucky) "🍀 " + it.title else it.title } ?: copy.t(Copy.LiveAll),
+                                Type.Caption,
+                                color = if (on) Color.White else Color.White.copy(alpha = 0.6f),
+                                fontSizeOverride = 11f,
+                            )
+                        }
+                    }
+                }
+            }
 
             // Grid
-            val cat = catalog.categories.firstOrNull { it.id == categoryId }
+            val node = root?.let { r -> r.children.firstOrNull { it.id == subId } ?: r }
+            val shown = node?.allGifts.orEmpty()
             Box(Modifier.fillMaxWidth().height(rdp(268))) {
                 when {
-                    loading && catalog.categories.isEmpty() -> Centered(copy.t(Copy.LiveGiftLoading))
-                    cat == null || cat.gifts.isEmpty() -> Centered(copy.t(Copy.LiveGiftEmpty))
+                    loading && roots.isEmpty() -> Centered(copy.t(Copy.LiveGiftLoading))
+                    node == null || shown.isEmpty() -> Centered(copy.t(Copy.LiveGiftEmpty))
                     else -> LazyVerticalGrid(
                         columns = GridCells.Fixed(4),
                         modifier = Modifier.fillMaxSize(),
@@ -331,15 +450,23 @@ internal fun LiveGiftSheet(
                         horizontalArrangement = Arrangement.spacedBy(rdp(6)),
                         verticalArrangement = Arrangement.spacedBy(rdp(6)),
                     ) {
-                        items(cat.gifts, key = { it.id }) { g ->
-                            val luckyCell = cat.lucky || g.lucky
+                        items(shown, key = { it.id }) { leaf ->
+                            val g = leaf.gift
+                            val luckyCell = node.lucky || root?.lucky == true || g.lucky
                             GiftCell(
                                 g,
                                 selected = g.id == selectedId,
                                 lucky = luckyCell,
+                                locked = !leaf.state.allowed,
+                                lockLabel = copy.t(Copy.LiveGiftLocked),
                                 onTap = {
-                                    // A lucky gift already selected: the cell is a send button too.
-                                    if (selectedId == g.id && luckyCell && combo > 0) send() else { selectedId = g.id; combo = 0 }
+                                    when {
+                                        // A locked gift explains itself in the rule's own words.
+                                        !leaf.state.allowed -> dialog = GiftDialog.Locked(leaf.state.text.ifBlank { copy.t(Copy.LiveGiftLockedTitle) })
+                                        // A lucky gift already selected: the cell is a send button too.
+                                        selectedId == g.id && luckyCell && combo > 0 -> send()
+                                        else -> { selectedId = g.id; combo = 0 }
+                                    }
                                 },
                             )
                         }
@@ -378,6 +505,23 @@ internal fun LiveGiftSheet(
                     }
                 }
                 Spacer(Modifier.weight(1f))
+                // More than one receiver: the tap's whole price sits next to
+                // Send, so the sum is read before it is spent.
+                if (selectedIds.size > 1 && selected != null) {
+                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = rdp(10))) {
+                        XaniText(
+                            copy.t(Copy.LiveGiftRecipients, "n" to selectedIds.size.toString()),
+                            Type.Caption, color = Color.White.copy(alpha = 0.55f), fontSizeOverride = 10f,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(rdp(4))) {
+                            CoinGlyph(rdp(11))
+                            XaniText(
+                                formatCoins(selected.coinPrice * selectedIds.size),
+                                Type.LabelBold, color = Color(0xFFFDE68A), fontSizeOverride = 12f,
+                            )
+                        }
+                    }
+                }
                 if (selectedLucky && combo > 0 && selected != null && comboGift == selected.id) {
                     ComboButton(combo, { comboRing.value }, copy, onTap = ::send)
                 } else {
@@ -386,7 +530,7 @@ internal fun LiveGiftSheet(
                             .height(rdp(40))
                             .clip(RoundedCornerShape(rdp(20)))
                             .background(Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))))
-                            .pressable(enabled = selected != null && receiverId != 0L, pressedScale = 0.94f, onClick = ::send)
+                            .pressable(enabled = selected != null && selectedIds.isNotEmpty(), pressedScale = 0.94f, onClick = ::send)
                             .padding(horizontal = rdp(26)),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -435,8 +579,11 @@ private const val HIDDEN_MAX_MS = 8_000L
 
 /** What the sheet has to say when a send does not go through. */
 private sealed interface GiftDialog {
-    data class NotEnough(val gift: String, val price: Long) : GiftDialog
+    /** [required] is the whole tap ([price] × [people]); the body names the gap. */
+    data class NotEnough(val gift: String, val price: Long, val required: Long, val people: Int) : GiftDialog
     data class Failed(val message: String, val retry: Boolean) : GiftDialog
+    /** A rule says this gift cannot be sent here and now; [message] is the rule's English. */
+    data class Locked(val message: String) : GiftDialog
 }
 
 /**
@@ -489,30 +636,52 @@ private fun GiftModal(
                         when (d) {
                             is GiftDialog.NotEnough -> Brush.linearGradient(listOf(Color(0xFFFDE68A), Color(0xFFF59E0B)))
                             is GiftDialog.Failed -> Brush.linearGradient(listOf(Color(0xFFFCA5A5), Color(0xFFEF4444)))
+                            is GiftDialog.Locked -> Brush.linearGradient(listOf(Color(0xFFC4B5FD), Color(0xFF7C3AED)))
                         },
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                XaniText(if (d is GiftDialog.NotEnough) "🪙" else "!", Type.LabelBold, color = Color.White, fontSizeOverride = 24f)
+                XaniText(
+                    when (d) {
+                        is GiftDialog.NotEnough -> "🪙"
+                        is GiftDialog.Locked -> "🔒"
+                        is GiftDialog.Failed -> "!"
+                    },
+                    Type.LabelBold, color = Color.White, fontSizeOverride = 24f,
+                )
             }
             Spacer(Modifier.height(rdp(14)))
             XaniText(
                 when (d) {
                     is GiftDialog.NotEnough -> copy.t(Copy.LiveGiftNotEnoughTitle)
                     is GiftDialog.Failed -> copy.t(Copy.LiveGiftFailedTitle)
+                    is GiftDialog.Locked -> copy.t(Copy.LiveGiftLockedTitle)
                 },
                 Type.LabelBold, color = Color.White, fontSizeOverride = 17f,
             )
             Spacer(Modifier.height(rdp(8)))
             XaniText(
                 when (d) {
-                    is GiftDialog.NotEnough -> copy.t(
-                        Copy.LiveGiftNotEnoughBody,
-                        "price" to formatCoins(d.price),
-                        "coins" to formatCoins(coins),
-                        "gift" to d.gift.ifBlank { copy.t(Copy.LiveGiftsTitle).lowercase(Locale.getDefault()) },
-                    )
+                    // Several people picked: the body names the whole tap's
+                    // price against what is in the wallet — required vs there.
+                    is GiftDialog.NotEnough -> if (d.people > 1) {
+                        copy.t(
+                            Copy.LiveGiftNotEnoughMultiBody,
+                            "gift" to d.gift.ifBlank { copy.t(Copy.LiveGiftsTitle).lowercase(Locale.getDefault()) },
+                            "n" to d.people.toString(),
+                            "required" to formatCoins(d.required),
+                            "coins" to formatCoins(coins),
+                        )
+                    } else {
+                        copy.t(
+                            Copy.LiveGiftNotEnoughBody,
+                            "price" to formatCoins(d.price),
+                            "coins" to formatCoins(coins),
+                            "gift" to d.gift.ifBlank { copy.t(Copy.LiveGiftsTitle).lowercase(Locale.getDefault()) },
+                        )
+                    }
                     is GiftDialog.Failed -> d.message
+                    is GiftDialog.Locked -> d.message
                 },
                 Type.Caption, color = Color.White.copy(alpha = 0.72f), fontSizeOverride = 13f,
                 align = androidx.compose.ui.text.style.TextAlign.Center,
@@ -521,6 +690,7 @@ private fun GiftModal(
             val primary: (() -> Unit)? = when (d) {
                 is GiftDialog.NotEnough -> onRecharge
                 is GiftDialog.Failed -> if (d.retry) onRetry else null
+                is GiftDialog.Locked -> null
             }
             if (primary != null) {
                 Box(
@@ -555,7 +725,7 @@ private fun GiftModal(
 }
 
 @Composable
-private fun ReceiverRow(people: List<LivePersonData>, receiverId: Long, copy: Copy, onPick: (Long) -> Unit) {
+private fun ReceiverRow(people: List<LivePersonData>, selected: Set<Long>, copy: Copy, onToggle: (Long) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -564,14 +734,22 @@ private fun ReceiverRow(people: List<LivePersonData>, receiverId: Long, copy: Co
             .padding(top = rdp(12), start = rdp(14), end = rdp(14)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        XaniText(copy.t(Copy.LiveGiftSendTo), Type.Caption, color = Color.White.copy(alpha = 0.5f), fontSizeOverride = 12f)
+        Column {
+            XaniText(copy.t(Copy.LiveGiftSendTo), Type.Caption, color = Color.White.copy(alpha = 0.5f), fontSizeOverride = 12f)
+            if (selected.size > 1) {
+                XaniText(
+                    copy.t(Copy.LiveGiftRecipients, "n" to selected.size.toString()),
+                    Type.LabelBold, color = Color(0xFFA78BFA), fontSizeOverride = 11f,
+                )
+            }
+        }
         Spacer(Modifier.width(rdp(10)))
         LazyRow(
             Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(rdp(10)),
         ) {
             items(people, key = { it.id }) { p ->
-                val on = p.id == receiverId
+                val on = p.id in selected
                 val name = p.fullName.ifBlank { p.username }.ifBlank { if (p.role == "host") copy.t(Copy.LiveGiftHost) else "…" }
                 val scale = remember { Animatable(1f) }
                 LaunchedEffect(on) { scale.animateTo(if (on) 1.08f else 1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
@@ -585,7 +763,7 @@ private fun ReceiverRow(people: List<LivePersonData>, receiverId: Long, copy: Co
                             else Modifier.border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape),
                         )
                         .padding(3.dp)
-                        .pressable(pressedScale = 0.92f, onClick = { onPick(p.id) }),
+                        .pressable(pressedScale = 0.92f, onClick = { onToggle(p.id) }),
                     contentAlignment = Alignment.Center,
                 ) {
                     PersonAvatar(p.id, name, p.avatarUrl, rdp(40), frameUrl = p.frameUrl, frameMime = p.frameMime)
@@ -600,6 +778,21 @@ private fun ReceiverRow(people: List<LivePersonData>, receiverId: Long, copy: Co
                             XaniText(copy.t(Copy.LiveGiftHost), Type.LabelBold, color = Color.White, fontSizeOverride = 8f)
                         }
                     }
+                    if (on) {
+                        // Picked: the check reads at a glance which avatars the
+                        // tap will pay for.
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .size(rdp(15))
+                                .clip(CircleShape)
+                                .background(Color(0xFF22C55E))
+                                .border(1.dp, Color.White.copy(alpha = 0.9f), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            XaniText("✓", Type.LabelBold, color = Color.White, fontSizeOverride = 9f)
+                        }
+                    }
                 }
             }
         }
@@ -607,7 +800,15 @@ private fun ReceiverRow(people: List<LivePersonData>, receiverId: Long, copy: Co
 }
 
 @Composable
-private fun GiftCell(g: GiftData, selected: Boolean, lucky: Boolean, onTap: () -> Unit) {
+private fun GiftCell(
+    g: GiftData,
+    selected: Boolean,
+    lucky: Boolean,
+    onTap: () -> Unit,
+    /** A rule forbids this gift for this sender → receiver: dimmed, with a lock. */
+    locked: Boolean = false,
+    lockLabel: String = "",
+) {
     val scale = remember { Animatable(1f) }
     LaunchedEffect(selected) {
         scale.animateTo(if (selected) 1.06f else 1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
@@ -615,7 +816,7 @@ private fun GiftCell(g: GiftData, selected: Boolean, lucky: Boolean, onTap: () -
     val shape = RoundedCornerShape(rdp(14))
     Column(
         Modifier
-            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+            .graphicsLayer { scaleX = scale.value; scaleY = scale.value; alpha = if (locked) 0.55f else 1f }
             .clip(shape)
             .background(if (selected) Color(0x338B5CF6) else Color.White.copy(alpha = 0.035f))
             .then(
@@ -636,6 +837,17 @@ private fun GiftCell(g: GiftData, selected: Boolean, lucky: Boolean, onTap: () -
             )
             if (lucky) {
                 XaniText("🍀", Type.Caption, fontSizeOverride = 10f, modifier = Modifier.align(Alignment.TopEnd))
+            }
+            if (locked) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .clip(RoundedCornerShape(rdp(8)))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = rdp(6), vertical = rdp(2)),
+                ) {
+                    XaniText("🔒 $lockLabel", Type.Caption, color = Color.White, fontSizeOverride = 9f, maxLines = 1)
+                }
             }
         }
         XaniText(

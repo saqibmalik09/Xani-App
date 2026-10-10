@@ -15,3 +15,8 @@
 -dontwarn androidx.credentials.**
 -dontwarn com.google.android.gms.**
 
+# Xani Lens: ML Kit face + selfie models must survive minify.
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.vision.** { *; }
+-dontwarn com.google.mlkit.**
+

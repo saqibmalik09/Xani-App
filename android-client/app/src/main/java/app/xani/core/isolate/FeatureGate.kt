@@ -50,11 +50,21 @@ class FeatureHost(
 val LocalFeatureHost = compositionLocalOf { FeatureHost { } }
 
 object FeatureFailures {
+    private const val TAG = "XaniFeature"
+
+    /** Full stack traces for the first few; after that one line, so a failure
+     *  recurring per frame cannot flood logd or stall the thread that threw. */
+    private const val STACKS = 20
+
     private val count = AtomicInteger(0)
 
     fun record(t: Throwable) {
-        count.incrementAndGet()
-        t.javaClass.simpleName
+        val n = count.incrementAndGet()
+        if (n <= STACKS) {
+            android.util.Log.w(TAG, "contained #$n", t)
+        } else if (n % 100 == 0) {
+            android.util.Log.w(TAG, "contained #$n: ${t.javaClass.simpleName}: ${t.message}")
+        }
     }
 
     val total: Int get() = count.get()

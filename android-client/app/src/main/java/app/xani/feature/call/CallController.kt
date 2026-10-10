@@ -437,13 +437,26 @@ object CallController {
      */
     fun ringFromPush(callId: Long, callerName: String, video: Boolean) {
         if (callId == 0L) return
+        if (!attached) return
         val cur = _state.value
         if (cur?.callId == callId) return
         if (cur?.active == true) return // busy: the caller's ring times out or the stream path says busy
         IncomingCallNotifier.show(app, callId, callerName, video)
+        // Ring immediately from the push — do not wait for the HTTP hydrate.
+        audio?.startRingtone()
+        startRingTimer(RING_TIMEOUT_MS)
         scope.launch {
-            val call = fetchRinging(callId) ?: return@launch
-            if (_state.value?.active == true) return@launch
+            val call = fetchRinging(callId)
+            if (call == null) {
+                audio?.stopRingtone()
+                IncomingCallNotifier.cancel(app)
+                return@launch
+            }
+            if (_state.value?.active == true) {
+                audio?.stopRingtone()
+                IncomingCallNotifier.cancel(app)
+                return@launch
+            }
             onInvite(call, notify = false)
         }
     }

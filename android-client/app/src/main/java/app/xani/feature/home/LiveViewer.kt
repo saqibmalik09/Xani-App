@@ -42,7 +42,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
+import app.xani.ui.brand.LocalBrand
 import app.xani.core.net.LiveChatData
 import app.xani.core.net.LivePersonData
 import app.xani.core.net.StageData
@@ -50,6 +50,7 @@ import app.xani.core.net.StageMemberData
 import app.xani.feature.call.AudioStage
 import app.xani.feature.call.CoHostRail
 import app.xani.feature.call.CoHostSheet
+import app.xani.feature.call.GiftBoxMark
 import app.xani.feature.call.HangUpMark
 import app.xani.feature.call.HlsPlayerView
 import app.xani.feature.call.LiveChatReactOverlay
@@ -64,9 +65,9 @@ import app.xani.feature.call.PkArena
 import app.xani.feature.call.RaiseHandMark
 import app.xani.feature.call.StageNotices
 import app.xani.feature.call.StagePersonSheet
+import app.xani.feature.call.VideoSurface
 import app.xani.feature.call.rememberCallPermissions
 import app.xani.feature.create.CreateIco
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,6 +80,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -93,8 +95,11 @@ import app.xani.core.net.PersonData
 import app.xani.core.net.Xani
 import app.xani.feature.games.LiveGamesOverlay
 import app.xani.feature.games.rememberLiveGamesState
+import app.xani.feature.gift.CardTabs
 import app.xani.feature.gift.EntranceOverlay
+import app.xani.feature.gift.GameWinOverlay
 import app.xani.feature.gift.GiftOverlay
+import app.xani.feature.gift.GiftingPanel
 import app.xani.feature.gift.LiveGiftSheet
 import app.xani.feature.gift.LiveStickerSheet
 import app.xani.feature.gift.StickerMark
@@ -157,9 +162,13 @@ internal fun LiveViewerScreen(
     var composing by remember { mutableStateOf(false) }
     val chatFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     // The host as a person: card sheet from the top pill, follow state shared
     // with every other surface through FollowStore.
     var hostSheet by remember { mutableStateOf(false) }
+    // Which tab the host card opens on: 0 profile (pill, Following chip),
+    // 1 gifting — the 💎 pill goes straight to the live's gift record.
+    var hostSheetTab by remember { mutableIntStateOf(0) }
     var hostPerson by remember { mutableStateOf<PersonData?>(null) }
     // The stage: the co-host list, one person's card, and who a gift opens on.
     var coHostSheet by remember { mutableStateOf(false) }
@@ -198,7 +207,9 @@ internal fun LiveViewerScreen(
         if (myRole == LiveRole.Guest) permissions(!audioRoom) { LiveSession.republish() }
     }
     val viewerCount = session?.viewers ?: stream.viewerCount
-    val viewersLabel = if (session != null || stream.viewerCount > 0) compactCount(viewerCount) else stream.viewers
+    // The pill counts everyone in the room, host included: the server's
+    // viewers number is the audience only, so the host is the +1.
+    val viewersLabel = if (session != null || stream.viewerCount > 0) compactCount(viewerCount + 1) else stream.viewers
 
     // Do I follow this host — the same relation every other surface reads, so
     // a follow here flips the button on their profile and in the feed too.
@@ -228,6 +239,12 @@ internal fun LiveViewerScreen(
         if (composing) {
             chatFocus.requestFocus()
             keyboard?.show()
+        } else {
+            // Closing the composer has to put the keyboard away too. A half-typed
+            // draft keeps the field composed, so the focus has to go as well or
+            // the system brings the keyboard straight back.
+            focus.clearFocus(force = true)
+            keyboard?.hide()
         }
     }
 
@@ -317,7 +334,7 @@ internal fun LiveViewerScreen(
                         // Keyed on the renderer instance: AndroidView runs its factory
                         // once, so a rejoin (new room, new renderer) would otherwise
                         // keep painting the released one — a black host, at random.
-                        if (host != null) key(host) { AndroidView(factory = { host }, modifier = Modifier.fillMaxSize()) }
+                        if (host != null) VideoSurface(host, Modifier.fillMaxSize())
                     }
                     session.hlsUrl.isNotBlank() -> HlsPlayerView(session.hlsUrl, Modifier.fillMaxSize())
                 }
@@ -376,6 +393,13 @@ internal fun LiveViewerScreen(
                 },
         )
 
+        // Typing: a tap anywhere off the composer puts the keyboard away. Sits
+        // under the chrome below, so the bar's own buttons still get the tap,
+        // and over the swipe zone, so a stray drag cannot hop streams mid-line.
+        if (composing) {
+            Box(Modifier.fillMaxSize().pressable(pressedScale = 1f) { composing = false })
+        }
+
         Column(
             Modifier
                 .fillMaxSize()
@@ -393,21 +417,9 @@ internal fun LiveViewerScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(rdp(10)),
             ) {
-                Box(
-                    Modifier
-                        .size(rdp(36))
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-                        .pressable(onClick = { exitSheet = true }),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    VectorCanvas(
-                        shapes = listOf(VShape.D("M10 3L5 8L10 13", stroke(Color.White, 2f))),
-                        viewport = 16f,
-                        modifier = Modifier.size(rdp(16)),
-                    )
-                }
+                // No back chevron here: the "…" button at the end of the row
+                // (and the system back) opens the same exit sheet, so the bar
+                // is just the host pill, the room's size, and the dots.
                 // Host pill — the host's profile, not the broadcast title.
                 // Tapping it opens the host card.
                 Row(
@@ -416,7 +428,7 @@ internal fun LiveViewerScreen(
                         .clip(RoundedCornerShape(rdp(28)))
                         .background(Color.Black.copy(alpha = 0.42f))
                         .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(rdp(28)))
-                        .pressable(pressedScale = 0.98f, onClick = { hostSheet = true })
+                        .pressable(pressedScale = 0.98f, onClick = { hostSheetTab = 0; hostSheet = true })
                         .padding(start = rdp(6), end = rdp(10), top = rdp(6), bottom = rdp(6)),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(rdp(8)),
@@ -454,7 +466,6 @@ internal fun LiveViewerScreen(
                         ) {
                             XaniText(stream.name, Type.LabelBold, color = Color.White, fontSizeOverride = 13f)
                             LevelMark(stream.hostLevel, rdp(14))
-                            XaniText(stream.flag, Type.Label, fontSizeOverride = 13f)
                         }
                         XaniText(stream.host, Type.Caption, color = Color.White.copy(alpha = 0.5f), fontSizeOverride = 10f)
                     }
@@ -476,12 +487,28 @@ internal fun LiveViewerScreen(
                                 .clip(RoundedCornerShape(rdp(14)))
                                 .background(Color.White.copy(alpha = 0.1f))
                                 .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(rdp(14)))
-                                .pressable(pressedScale = 0.92f, onClick = { hostSheet = true })
+                                .pressable(pressedScale = 0.92f, onClick = { hostSheetTab = 0; hostSheet = true })
                                 .padding(horizontal = rdp(12), vertical = rdp(6)),
                         ) {
                             XaniText("✓ " + copy.t(Copy.LiveFollowing), Type.LabelBold, color = Color.White.copy(alpha = 0.9f), fontSizeOverride = 11f)
                         }
                     }
+                }
+                // Everyone in the room (host included), right beside the host
+                // pill where a viewer looks for the room's size; tap opens
+                // who is here. It used to sit on the stats row below.
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(rdp(18)))
+                        .background(Color.Black.copy(alpha = 0.42f))
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(rdp(18)))
+                        .pressable(onClick = { if (stream.roomId != 0L) peopleSheet = true })
+                        .padding(horizontal = rdp(10), vertical = rdp(8)),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    EyeGlyph()
+                    Spacer(Modifier.width(rdp(5)))
+                    XaniText(viewersLabel, Type.LabelBold, color = Color.White, fontSizeOverride = 11f)
                 }
                 Box(
                     Modifier
@@ -496,37 +523,28 @@ internal fun LiveViewerScreen(
                 }
             }
 
-            // Stats row — viewer pill opens who is here
+            // Stats row. The broadcast title and the country flag used to sit
+            // here too; by request the title stays off the watch screen and the
+            // flag is gone, so the picture keeps the room to itself.
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = rdp(14), vertical = rdp(4)),
                 horizontalArrangement = Arrangement.spacedBy(rdp(8)),
             ) {
-                StatPill(onClick = { if (stream.roomId != 0L) peopleSheet = true }) {
-                    EyeGlyph()
-                    Spacer(Modifier.width(rdp(5)))
-                    XaniText(viewersLabel, Type.LabelBold, color = Color.White, fontSizeOverride = 11f)
-                }
-                StatPill {
+                // Diamonds credited to the host after the split, never the
+                // coin spend. Tapping opens the host's gift record for this live.
+                StatPill(onClick = { hostSheetTab = 1; hostSheet = true }) {
                     XaniText("💎", Type.Caption, fontSizeOverride = 12f)
                     Spacer(Modifier.width(rdp(5)))
                     XaniText(
-                        if (session != null) formatCoins(session.roomCoins) else stream.diamonds,
+                        if (session != null) formatCoins(session.roomDiamonds) else stream.diamonds,
                         Type.LabelBold,
                         color = Color(0xFFC4B5FD),
                         fontSizeOverride = 11f,
                     )
                 }
-                StatPill {
-                    XaniText(stream.flag, Type.Caption, fontSizeOverride = 11f)
-                    Spacer(Modifier.width(rdp(5)))
-                    XaniText(stream.country, Type.Label, color = Color.White.copy(alpha = 0.75f), fontSizeOverride = 11f)
-                }
                 Spacer(Modifier.weight(1f))
-                StatPill {
-                    XaniText(stream.category, Type.Caption, color = Color.White.copy(alpha = 0.55f), fontSizeOverride = 10f)
-                }
             }
 
             val audioStageShown = session != null && !session.over && audioRoom && !inPk
@@ -550,21 +568,15 @@ internal fun LiveViewerScreen(
                                     val host = remember(session.roomId, session.mediaRev, hostId) {
                                         LiveSession.hostView(ctx)
                                     }
-                                    if (host != null) key(host) {
-                                        AndroidView(factory = { host }, modifier = Modifier.fillMaxSize())
-                                    }
+                                    if (host != null) VideoSurface(host, Modifier.fillMaxSize())
                                 }
                                 session.hlsUrl.isNotBlank() -> HlsPlayerView(session.hlsUrl, Modifier.fillMaxSize())
                             }
                         },
                     )
                 } else if (audioRoom) {
-                    // The seats: host in the middle, guests around. An empty seat
-                    // is a door — tap it to sit; a taken one opens that person.
-                    // The stage owns whatever height is left between the chrome
-                    // and the chat, so when the keyboard rises the seats give
-                    // way and the composer stays above it, instead of the fixed
-                    // rings shoving the bar off the bottom of the screen.
+                    // The seats: host top-left, guests 1…n in a 5–6 column grid.
+                    // Empty seat is a door — tap it to sit; a taken one opens that person.
                     Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
                         AudioStage(
                             stage = stage,
@@ -581,20 +593,6 @@ internal fun LiveViewerScreen(
                             },
                         )
                     }
-                } else if (stage.guests.isNotEmpty()) {
-                    // Co-hosts, under the host's name: 1 2 3 4 left → right and
-                    // "…" for the rest. Nothing else lives on this row, so the
-                    // tiles never sit on the stats or the action chrome.
-                    CoHostRail(
-                        stage = stage,
-                        mediaRev = session.mediaRev,
-                        horizontal = true,
-                        modifier = Modifier
-                            .align(Alignment.Start)
-                            .padding(horizontal = rdp(14), vertical = rdp(6)),
-                        onTile = { stagePerson = it },
-                        onMore = { coHostSheet = true },
-                    )
                 }
             }
             StageNotices(copy, Modifier.align(Alignment.CenterHorizontally).padding(top = rdp(4)))
@@ -605,6 +603,26 @@ internal fun LiveViewerScreen(
             // keyboard has room without pushing the field out of view.
             if (!composing) {
                 LiveHeartsLayer(hearts, Modifier.fillMaxWidth().height(rdp(120)))
+            }
+
+            // Co-hosts: 1 2 3 4 on the far side from the comments, directly
+            // above them. Below the weighted spacer, so the row rides the
+            // bottom cluster with the chat and the action bar and keeps its
+            // place as the room fills, instead of sitting over the picture.
+            if (session != null && !session.over && !audioRoom &&
+                !(inPk && pk != null) && stage.guests.isNotEmpty()
+            ) {
+                CoHostRail(
+                    stage = stage,
+                    mediaRev = session.mediaRev,
+                    horizontal = true,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(horizontal = rdp(14))
+                        .padding(bottom = rdp(8)),
+                    onTile = { stagePerson = it },
+                    onMore = { coHostSheet = true },
+                )
             }
 
             // Chat — real room lines from the session. A keyed lazy list that
@@ -634,6 +652,9 @@ internal fun LiveViewerScreen(
                         onUser = { chatUser = m.user },
                         onHold = { reactLine = m },
                         onReact = { LiveSession.reactChat(m, it) },
+                        likeLabel = copy.t(Copy.LiveSentLike),
+                        enterLabel = copy.t(Copy.LiveEnteredRoom),
+                        leaveLabel = copy.t(Copy.LiveLeftRoom),
                     )
                 }
             }
@@ -737,6 +758,24 @@ internal fun LiveViewerScreen(
                         ) {
                             CreateIco.Mic(Color.White, rdp(18), off = !micOn)
                         }
+                        // The camera button appears only while the host allows
+                        // co-host cameras; off by default — turning it on is my
+                        // choice, and the seat token enforces the same rule.
+                        if (!audioRoom && stage.guestCam) {
+                            val camOn = session?.cameraOff == false
+                            ActionCircle(
+                                background = if (camOn) Color(0x3334D399) else Color.Black.copy(alpha = 0.5f),
+                                border = if (camOn) Color(0x6634D399) else Color.White.copy(alpha = 0.12f),
+                                onClick = { permissions(true) { LiveSession.toggleCamera() } },
+                            ) {
+                                CreateIco.Cam(Color.White, rdp(18), off = !camOn)
+                            }
+                            if (camOn) {
+                                ActionCircle(onClick = { LiveSession.switchCamera() }) {
+                                    CreateIco.FlipCam(Color.White, rdp(18))
+                                }
+                            }
+                        }
                         Box(
                             Modifier
                                 .size(rdp(40))
@@ -792,17 +831,31 @@ internal fun LiveViewerScreen(
         }
 
         // Gifts landing in the room — over the video and chrome, under the sheets.
-        GiftOverlay(state = giftOverlay, copy = copy)
+        GiftOverlay(state = giftOverlay, copy = copy, onUser = { chatUser = it })
 
         // Someone with an entrance effect walking in — same layer as gifts.
         EntranceOverlay(roomId = stream.roomId, copy = copy)
 
+        // A game win somewhere on the platform — a short centered strip.
+        GameWinOverlay(roomId = stream.roomId, copy = copy)
+
         // Exit sheet
         if (exitSheet) {
+            val brand = LocalBrand.current
             LiveExitSheet(
                 stream = stream,
                 copy = copy,
                 onMinimize = { exitSheet = false; minimize() },
+                onShare = {
+                    LiveShare.share(
+                        context = ctx,
+                        scope = scope,
+                        copy = copy,
+                        brand = brand,
+                        roomId = stream.roomId,
+                        onDone = { exitSheet = false },
+                    )
+                },
                 onCloseStream = { exitSheet = false; dismiss() },
                 onCancel = { exitSheet = false },
                 onModerators = if (session?.canModerate == true) ({ exitSheet = false; modsSheet = true }) else null,
@@ -833,6 +886,8 @@ internal fun LiveViewerScreen(
                 roomId = stream.roomId,
                 viewers = viewerCount,
                 copy = copy,
+                // Their card takes the list's place, still inside the room.
+                onUser = { peopleSheet = false; chatUser = it },
                 onClose = { peopleSheet = false },
             )
         }
@@ -889,13 +944,15 @@ internal fun LiveViewerScreen(
                 stream = stream,
                 person = hostPerson,
                 following = following,
-                diamonds = session?.roomCoins ?: 0L,
+                diamonds = session?.roomDiamonds ?: 0L,
                 viewers = viewerCount,
                 copy = copy,
                 onFollowToggle = { if (hostUid != 0L) FollowStore.set(hostUid, !following) },
                 onMessage = { composing = true },
                 onGift = { if (stream.roomId != 0L) giftSheet = true },
                 onClose = { hostSheet = false },
+                roomId = stream.roomId,
+                initialTab = hostSheetTab,
             )
         }
 
@@ -1201,23 +1258,6 @@ private fun ThreeDots() {
     )
 }
 
-/** A wrapped present: lid, box, ribbon and bow, all strokes. */
-@Composable
-private fun GiftBoxMark() {
-    val s = stroke(Color.White, 1.5f)
-    VectorCanvas(
-        shapes = listOf(
-            VShape.D("M2.5 5.5h11V8h-11z", s),
-            VShape.D("M3.5 8v5.5h9V8", s),
-            VShape.Line(8f, 5.5f, 8f, 13.5f, s),
-            VShape.D("M8 5.5C8 3.8 6.7 2.4 5.6 3 4.5 3.6 6 5.5 8 5.5z", s),
-            VShape.D("M8 5.5c0-1.7 1.3-3.1 2.4-2.5 1.1.6-.4 2.5-2.4 2.5z", s),
-        ),
-        viewport = 16f,
-        modifier = Modifier.size(rdp(20)),
-    )
-}
-
 /**
  * The host as a card over their own broadcast: avatar, follow state, their
  * numbers (diamonds received this live, watchers, followers), and the two
@@ -1235,15 +1275,25 @@ private fun LiveHostSheet(
     onMessage: () -> Unit,
     onGift: () -> Unit,
     onClose: () -> Unit,
+    /** The room, for the Gifting tab's "This LIVE" window. */
+    roomId: Long = 0L,
+    /** 0 profile, 1 gifting — the 💎 pill opens straight onto the record. */
+    initialTab: Int = 0,
 ) {
+    var tab by remember(initialTab) { mutableIntStateOf(initialTab) }
     LiveSheet(onClose = onClose) { close ->
         val name = person?.fullName?.takeIf { it.isNotBlank() } ?: stream.name
         val handle = person?.username?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: stream.host
+        CardTabs(tab, copy, onSelect = { tab = it }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = rdp(10)))
+        if (tab == 1) {
+            GiftingPanel(userId = stream.hostId, copy = copy, roomId = roomId, modifier = Modifier.padding(top = rdp(10), bottom = rdp(12)))
+            return@LiveSheet
+        }
         Column(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = rdp(20))
-                .padding(bottom = rdp(18)),
+                .padding(top = rdp(12), bottom = rdp(18)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(
@@ -1363,6 +1413,7 @@ private fun LiveExitSheet(
     stream: LiveTile,
     copy: Copy,
     onMinimize: () -> Unit,
+    onShare: () -> Unit,
     onCloseStream: () -> Unit,
     onCancel: () -> Unit,
     /** Host / moderator only: open the moderators list. */
@@ -1451,6 +1502,29 @@ private fun LiveExitSheet(
                     shapes = listOf(
                         VShape.D(
                             "M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3",
+                            stroke(Color(0xFF6D28D9), 2f),
+                        ),
+                    ),
+                    viewport = 24f,
+                    modifier = Modifier.size(rdp(20)),
+                )
+            }
+            Spacer(Modifier.height(rdp(10)))
+            // Share: copies the live link and opens the system sheet. Same URL
+            // shape as a profile share so a tap opens this room, not just the app.
+            ExitOption(
+                bg = Color(0x126D28D9),
+                border = Color(0x296D28D9),
+                title = copy.t(Copy.LiveShare),
+                titleColor = Color(0xFF1E0A50),
+                sub = copy.t(Copy.LiveShareSub),
+                badge = null,
+                onClick = onShare,
+            ) {
+                VectorCanvas(
+                    shapes = listOf(
+                        VShape.D(
+                            "M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13",
                             stroke(Color(0xFF6D28D9), 2f),
                         ),
                     ),

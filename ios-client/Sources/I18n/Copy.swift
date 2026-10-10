@@ -16,6 +16,11 @@ enum CopyKey: String {
     case liveGiftsTitle, liveGiftSend, liveGiftSendTo, liveGiftBalance, liveGiftRecharge, liveGiftNotEnough, liveGiftFailed
     case liveGiftNotEnoughTitle, liveGiftNotEnoughBody, liveGiftFailedTitle, liveGiftDismiss, liveGiftRetry, liveGiftTooFast
     case liveGiftEmpty, liveGiftLoading, liveGiftSentLine, liveGiftHost, liveGiftCombo, liveGiftLuckyHint
+    case liveGiftLocked, liveGiftLockedTitle
+    case giftingTabProfile, giftingTabGifting, giftingThisLive, giftingToday, giftingWeek, giftingMonth, giftingDates
+    case giftingTopSenders, giftingTopReceivers, giftingLatest, giftingReceived, giftingSent, giftingDiamonds, giftingCoins
+    case giftingGiftsN, giftingEmpty, giftingPrivate, giftingLoadFailed, giftingRetry, giftingShow, giftingLive, giftingCashback
+    case giftingViewProfile, giftingFrom, giftingTo
     case gamesTitle, gamesBody, gamesRefresh, gamesLoading, gamesUnavailable, gamesRetry, gamesEmpty, comingSoon
     case createTitle, createBody
     case createAddSound, createPost, createGoLive, createGoLiveTitle, createGoLiveBtn
@@ -25,6 +30,7 @@ enum CopyKey: String {
     case createRoomSize, createSeats, createSeatsHint, createChipCode, createChipAma, createChipStudy
     case createSaved, createEndLive
     case createFlashOn, createFlashOff, createTimer, createGrid, createSpeed, createBeauty
+    case createLooks, createBackground, createMasks, createEffects, createLensOff, createBgBlur, createBannerPhoto
     case createSeatLayout, createOrderSeats, createOrderSeatsHint, createSeatHost, createSeatCount, createDone
     case createLiveVideoTitle, createLiveAudioTitle, createLiveVideoSub, createLiveAudioSub
     case createAudioRoomLabel, createAudioRoomSub, createBanner, createTitleField, createLiveTitleHint
@@ -70,6 +76,8 @@ enum CopyKey: String {
     case callRinging, callReconnecting, callIncomingAudio, callIncomingVideo, callAccept, callDecline
     case callBusy, callNoAnswer, callDeclined, callMissed, callLost, callFailed, callUnavailable, callEnded
     case callOngoing, callAddPerson, callNobodyToAdd, callInCall, callYou
+    case liveTimeNotCounting, liveSummaryTitle, liveSummaryVerified, liveSummaryWall, liveSummaryPaused, liveSummaryToday
+    case liveSummaryLost, liveSummaryPeak, liveSummaryJoins, liveOk
     case inboxVideo, inboxEncrypted, inboxFollow, inboxNewFollowers, inboxSystem, inboxVideoRestrictedTitle, inboxVideoRestrictedBody, inboxSupportRepliedTitle
     case inboxTypeSearch, inboxNoResults, inboxSeen, inboxDelivered, inboxRecents, inboxSeeAll
     case inboxPause, inboxResume, inboxShare, inboxReadReceipts, inboxMedia, inboxMarkRead
@@ -95,6 +103,13 @@ enum CopyKey: String {
     case inboxDeleteMsg, inboxRemove, inboxFromYou, inboxCreatePoll, inboxAskQuestion, inboxLeavePoll, inboxMultiple
     case inboxCreateEvent, inboxEventName, inboxEventDesc, inboxEventWhen, inboxReminder
     case inboxHourBefore, inboxMinBefore, inboxDayBefore, inboxNever, inboxAddCalendar, inboxEditEvent, inboxLeaveEvent, inboxEventSoon
+    case rewardsTitle, rewardsToday, rewardsWeek, rewardsMonth, rewardsAll, rewardsLiveTime, rewardsAdded, rewardsPending, rewardsClaimable
+    case rewardsClaim, rewardsClaimed, rewardsClaimWaiting, rewardsClaimOpens, rewardsByDay, rewardsEmpty, rewardsEmptyRange, rewardsLoadFailed, rewardsOlder
+    case rewardsFilterAll, rewardsStatusPending, rewardsStatusAdded, rewardsStatusClaimable, rewardsStatusClaimed, rewardsStatusExpired, rewardsStatusCancelled
+    case rewardsCompletedAt, rewardsAddedAt, rewardsBalance, rewardsRequired, rewardsVerified, rewardsDay, rewardsRole, rewardsTimeline, rewardsDetail
+    case rewardsNoRewardsDay, rewardsDayNote, rewardsOff, rewardsEligible, rewardsEligibleNext, rewardsEligibleDone, rewardsNotEligible
+    case rewardsNotEligibleRole, rewardsNotEligibleCondition, rewardsNotEligibleNeed, rewardsNotEligibleLimit, rewardsNotEligibleNone, rewardsNotEligibleTime, rewardsHudNext, rewardsHudEarned
+    case rewardsToastAdded, rewardsToastClaimable, rewardsToastPending, rewardsCohost, rewardsHost, rewardsRetry
     case rolesTitle, rolesTabMine, rolesTabRequests, rolesTabApprovals, rolesMineEmpty
     case rolesJoinTitle, rolesJoinHint, rolesCodePlaceholder, rolesCodeOwner, rolesPickRole, rolesNotePlaceholder
     case rolesApply, rolesApplied, rolesMyCodes, rolesCodeOpens, rolesCopied, rolesShareCode
@@ -167,6 +182,15 @@ private let En: [CopyKey: String] = [
     .liveGiftTooFast: "You are sending very fast. Take a breath and try again.",
     .liveGiftEmpty: "No gifts yet.", .liveGiftLoading: "Loading gifts…", .liveGiftSentLine: "sent {gift} to {to}",
     .liveGiftHost: "Host", .liveGiftCombo: "Combo", .liveGiftLuckyHint: "Tap again to keep sending",
+    .liveGiftLocked: "Locked", .liveGiftLockedTitle: "This gift is locked",
+    .giftingTabProfile: "Profile", .giftingTabGifting: "Gifting",
+    .giftingThisLive: "This live", .giftingToday: "Today", .giftingWeek: "This week", .giftingMonth: "This month", .giftingDates: "Dates",
+    .giftingTopSenders: "Top senders", .giftingTopReceivers: "Top receivers", .giftingLatest: "Latest",
+    .giftingReceived: "Received", .giftingSent: "Sent", .giftingDiamonds: "Diamonds", .giftingCoins: "Coins",
+    .giftingGiftsN: "{n} gifts", .giftingEmpty: "No gifts in this period.",
+    .giftingPrivate: "This person keeps their gifts private.", .giftingLoadFailed: "Couldn't load gifts.",
+    .giftingRetry: "Retry", .giftingShow: "Show", .giftingLive: "LIVE", .giftingCashback: "+{n} back",
+    .giftingViewProfile: "View profile", .giftingFrom: "From", .giftingTo: "To",
     .gamesTitle: "Games",
     .gamesBody: "Play full-mode games with your coin balance.",
     .gamesRefresh: "Refresh",
@@ -184,11 +208,13 @@ private let En: [CopyKey: String] = [
     .create5m: "5m", .create60s: "60s", .create15s: "15s",
     .createCover: "Cover image", .createCoverHint: "Select and preview a cover",
     .createLiveHint: "Weekend coding session & Q&A", .createVideo: "Video", .createAudioOnly: "Audio",
-    .createRoomSize: "Room size", .createSeats: "Custom number of seats", .createSeatsHint: "Enter number (max 35)",
+    .createRoomSize: "Room size", .createSeats: "Custom number of seats", .createSeatsHint: "Enter number (max 45)",
     .createChipCode: "Coding live", .createChipAma: "Ask me anything", .createChipStudy: "Study with me",
     .createSaved: "Saved", .createEndLive: "End LIVE",
     .createFlashOn: "Flash On", .createFlashOff: "Flash Off", .createTimer: "Timer",
     .createGrid: "Grid", .createSpeed: "Speed", .createBeauty: "Beauty",
+    .createLooks: "Looks", .createBackground: "Background", .createMasks: "Masks",
+    .createEffects: "Effects", .createLensOff: "Off", .createBgBlur: "Blur", .createBannerPhoto: "Photo",
     .createSeatLayout: "Seat layout", .createOrderSeats: "Order seats",
     .createOrderSeatsHint: "Drag a seat into a slot. Empty slots stay open.", .createSeatHost: "Host",
     .createSeatCount: "{n} seats", .createDone: "Done",
@@ -196,7 +222,7 @@ private let En: [CopyKey: String] = [
     .createLiveVideoSub: "You'll be visible on camera.", .createLiveAudioSub: "Listeners join to hear you speak.",
     .createAudioRoomLabel: "Audio Room", .createAudioRoomSub: "Live voice with speakers & audience",
     .createBanner: "Listing Banner", .createTitleField: "Title", .createLiveTitleHint: "What's your live about?",
-    .createSpeakerSeats: "Speaker Seats", .createCustom: "Custom", .createSeatsMax: "max 35",
+    .createSpeakerSeats: "Speaker Seats", .createCustom: "Custom", .createSeatsMax: "max 45",
     .createAudience: "Audience", .createAudiencePublic: "Public", .createAudienceFriends: "Friends",
     .createAudiencePrivate: "Private", .createAudiencePublicSub: "Everyone",
     .createAudienceFriendsSub: "Following", .createAudiencePrivateSub: "Password",
@@ -292,6 +318,11 @@ private let En: [CopyKey: String] = [
     .callFailed: "Couldn't connect", .callUnavailable: "Calling isn't available on this build", .callEnded: "Call ended",
     .callOngoing: "Ongoing call", .callAddPerson: "Add person", .callNobodyToAdd: "Nobody else to add right now",
     .callInCall: "{n} in call", .callYou: "You",
+    .liveTimeNotCounting: "Not counting — reconnecting", .liveSummaryTitle: "Your live has ended",
+    .liveSummaryVerified: "Time counted", .liveSummaryWall: "On air {t}",
+    .liveSummaryPaused: "{t} not counted while you were offline", .liveSummaryToday: "Today so far: {t}",
+    .liveSummaryLost: "Your connection dropped for too long, so the live was ended for everyone.",
+    .liveSummaryPeak: "Peak viewers", .liveSummaryJoins: "Joins", .liveOk: "OK",
     .inboxFollow: "Follow", .inboxNewFollowers: "NEW FOLLOWERS", .inboxSystem: "SYSTEM",
     .inboxVideoRestrictedTitle: "Video restricted",
     .inboxVideoRestrictedBody: "Your video has been restricted for posting against guidelines. If you think this is a mistake you can appeal back for review.",
@@ -353,6 +384,25 @@ private let En: [CopyKey: String] = [
     .inboxNever: "Never", .inboxAddCalendar: "Add to calendar",
     .inboxEditEvent: "Edit event", .inboxLeaveEvent: "Leave event",
     .inboxEventSoon: "Pick a time at least 15 minutes from now",
+    .rewardsTitle: "My Rewards", .rewardsToday: "Today", .rewardsWeek: "Week", .rewardsMonth: "Month", .rewardsAll: "All",
+    .rewardsLiveTime: "Live time", .rewardsAdded: "Added to balance", .rewardsPending: "Pending", .rewardsClaimable: "Ready to claim",
+    .rewardsClaim: "Claim {amt}", .rewardsClaimed: "{amt} added to your balance", .rewardsClaimWaiting: "{amt} waiting for its claim window",
+    .rewardsClaimOpens: "opens {t}", .rewardsByDay: "By day", .rewardsEmpty: "No rewards yet. Go live and your time on air earns them.",
+    .rewardsEmptyRange: "No rewards in this period.", .rewardsLoadFailed: "Couldn't load your rewards.", .rewardsOlder: "Earlier rewards",
+    .rewardsFilterAll: "All", .rewardsStatusPending: "Pending", .rewardsStatusAdded: "Added", .rewardsStatusClaimable: "Claimable",
+    .rewardsStatusClaimed: "Claimed", .rewardsStatusExpired: "Expired", .rewardsStatusCancelled: "Cancelled",
+    .rewardsCompletedAt: "Completed at", .rewardsAddedAt: "Added at", .rewardsBalance: "Balance", .rewardsRequired: "Required",
+    .rewardsVerified: "Verified", .rewardsDay: "Reward day", .rewardsRole: "As", .rewardsTimeline: "Timeline", .rewardsDetail: "Reward",
+    .rewardsNoRewardsDay: "Live time, no reward reached",
+    .rewardsDayNote: "Reward days run from {start} in {tz}, the same calendar as your live time. Times shown are in {tz}.",
+    .rewardsOff: "Live rewards are paused right now.", .rewardsEligible: "Eligible for rewards", .rewardsEligibleNext: "{amt} after {t} live",
+    .rewardsEligibleDone: "Today's rewards all earned", .rewardsNotEligible: "Not eligible for rewards",
+    .rewardsNotEligibleRole: "Your role isn't included in this campaign", .rewardsNotEligibleCondition: "A campaign condition isn't met yet",
+    .rewardsNotEligibleNeed: "Need {which}", .rewardsNotEligibleTime: "{t} more live time",
+    .rewardsNotEligibleLimit: "Reward limit reached for this period", .rewardsNotEligibleNone: "No reward campaign is running",
+    .rewardsHudNext: "{amt} in {t}", .rewardsHudEarned: "{amt} earned", .rewardsToastAdded: "+{amt} added · {b} → {a}",
+    .rewardsToastClaimable: "+{amt} ready to claim", .rewardsToastPending: "{amt} reached · checking", .rewardsCohost: "Co-host", .rewardsHost: "Host",
+    .rewardsRetry: "Retry",
     .rolesTitle: "My roles", .rolesTabMine: "Roles", .rolesTabRequests: "Requests", .rolesTabApprovals: "Approvals",
     .rolesMineEmpty: "You don't hold a role yet. Got a referral code? Enter it below.",
     .rolesJoinTitle: "Join with a referral code",

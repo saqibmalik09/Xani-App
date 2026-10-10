@@ -446,6 +446,13 @@ function remaining(until?: string, permanent?: boolean) {
   return `${Math.floor(h / 24)}d left`
 }
 
+/** Effective capture/mic state from the moderation endpoint (permission engine). */
+type ModInfo = {
+  can_capture: boolean
+  capture_override: 'allow' | 'deny' | 'inherit'
+  mic_disabled: boolean
+}
+
 /** Dedicated Moderation tool: account ban + streaming. Devices stay on Devices. */
 export function AccountModerationPage() {
   const { can } = useAuth()
@@ -453,15 +460,28 @@ export function AccountModerationPage() {
   const [busy, setBusy] = useState(false)
   const [ok, setOk] = useState('')
   const [blocks, setBlocks] = useState<RestrictionsExtra | null>(null)
+  const [mod, setMod] = useState<ModInfo | null>(null)
+  const [micReason, setMicReason] = useState('')
+  const [warnReason, setWarnReason] = useState('')
+
+  const canCaptureManage = can('screen.capture.manage')
+  const canModApp = can('mod.app_users')
 
   const loadBlocks = useCallback(async () => {
     const r = await get<RestrictionsExtra>(`/v1/admin/users/${id}/restrictions`)
     if (r.ok) setBlocks(r.data)
   }, [id])
 
+  const loadMod = useCallback(async () => {
+    if (!canCaptureManage && !canModApp) return
+    const r = await get<ModInfo>(`/v1/mod/users/${id}`)
+    if (r.ok) setMod(r.data)
+  }, [id, canCaptureManage, canModApp])
+
   useEffect(() => {
     void loadBlocks()
-  }, [loadBlocks])
+    void loadMod()
+  }, [loadBlocks, loadMod])
 
   if (loading) return <PageLoader label="Loading moderation…" />
   if (!user) {
@@ -485,6 +505,7 @@ export function AccountModerationPage() {
     setOk(success)
     await reload()
     await loadBlocks()
+    await loadMod()
   }
 
   return (
@@ -502,22 +523,137 @@ export function AccountModerationPage() {
 
       <Card>
         <header style={{ marginBottom: 10 }}>
-          <h2 style={{ margin: 0, fontSize: 15 }}>Screenshots</h2>
+          <h2 style={{ margin: 0, fontSize: 15 }}>
+            Screenshots &amp; screen recording
+            {mod ? (
+              <span className={`status-pill ${mod.can_capture ? 'on' : 'off'}`} style={{ marginLeft: 8 }}>
+                {mod.can_capture ? 'Allowed' : 'Blocked'}
+              </span>
+            ) : null}
+          </h2>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            The app blocks capture unless this account holds screen.capture — from its role, or from a
+            direct override here. Revoke wins over any role; &ldquo;Role decides&rdquo; removes the override.
+          </p>
         </header>
-        <Button
-          size="sm"
-          variant="secondary"
-          loading={busy}
-          onClick={() =>
-            void act(
-              () => patch(`/v1/admin/users/${user.id}/screenshots`, { allow: !user.allow_screenshots }),
-              user.allow_screenshots ? 'Screenshots disallowed.' : 'Screenshots allowed.',
-            )
-          }
-        >
-          {user.allow_screenshots ? 'Disallow screenshots' : 'Allow screenshots'}
-        </Button>
+        {canCaptureManage && mod ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button
+              size="sm"
+              variant={mod.capture_override === 'allow' ? 'primary' : 'secondary'}
+              loading={busy}
+              onClick={() =>
+                void act(() => post(`/v1/mod/users/${user.id}/capture`, { mode: 'allow' }), 'Screen capture allowed.')
+              }
+            >
+              Allow
+            </Button>
+            <Button
+              size="sm"
+              variant={mod.capture_override === 'deny' ? 'primary' : 'secondary'}
+              loading={busy}
+              onClick={() =>
+                void act(() => post(`/v1/mod/users/${user.id}/capture`, { mode: 'revoke' }), 'Screen capture revoked.')
+              }
+            >
+              Revoke
+            </Button>
+            <Button
+              size="sm"
+              variant={mod.capture_override === 'inherit' ? 'primary' : 'secondary'}
+              loading={busy}
+              onClick={() =>
+                void act(() => post(`/v1/mod/users/${user.id}/capture`, { mode: 'inherit' }), 'Override removed; the role decides.')
+              }
+            >
+              Role decides
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy}
+            onClick={() =>
+              void act(
+                () => patch(`/v1/admin/users/${user.id}/screenshots`, { allow: !user.allow_screenshots }),
+                user.allow_screenshots ? 'Screenshots disallowed.' : 'Screenshots allowed.',
+              )
+            }
+          >
+            {user.allow_screenshots ? 'Disallow screenshots' : 'Allow screenshots'}
+          </Button>
+        )}
       </Card>
+
+      {canModApp ? (
+        <Card>
+          <header style={{ marginBottom: 10 }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>
+              Microphone
+              {mod ? (
+                <span className={`status-pill ${mod.mic_disabled ? 'off' : 'on'}`} style={{ marginLeft: 8 }}>
+                  {mod.mic_disabled ? 'Disabled' : 'Enabled'}
+                </span>
+              ) : null}
+            </h2>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+              Disabling blocks starting or accepting calls, going live, taking an audio seat and unmuting
+              on stage, until re-enabled. The person is notified.
+            </p>
+          </header>
+          {mod && !mod.mic_disabled ? (
+            <div style={{ maxWidth: 360, marginBottom: 10 }}>
+              <Field label="Reason (shown to the person)" value={micReason} onChange={(e) => setMicReason(e.target.value)} />
+            </div>
+          ) : null}
+          <Button
+            size="sm"
+            variant={mod?.mic_disabled ? 'secondary' : 'danger'}
+            loading={busy}
+            disabled={!mod}
+            onClick={() =>
+              void act(
+                () => post(`/v1/mod/users/${user.id}/mic`, { disabled: !mod?.mic_disabled, reason: micReason.trim() }),
+                mod?.mic_disabled ? 'Microphone enabled.' : 'Microphone disabled.',
+              )
+            }
+          >
+            {mod?.mic_disabled ? 'Enable microphone' : 'Disable microphone'}
+          </Button>
+        </Card>
+      ) : null}
+
+      {canModApp ? (
+        <Card>
+          <header style={{ marginBottom: 10 }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>Send warning</h2>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+              Lands in the person&apos;s notifications with your reason, plus a push.
+            </p>
+          </header>
+          <div style={{ maxWidth: 420, marginBottom: 10 }}>
+            <Field label="Reason" value={warnReason} onChange={(e) => setWarnReason(e.target.value)} />
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy}
+            disabled={!warnReason.trim()}
+            onClick={() =>
+              void act(
+                () => post(`/v1/mod/users/${user.id}/warn`, { reason: warnReason.trim() }).then((r) => {
+                  if (r.ok) setWarnReason('')
+                  return r
+                }),
+                'Warning sent.',
+              )
+            }
+          >
+            Send warning
+          </Button>
+        </Card>
+      ) : null}
 
       <Card>
         <header style={{ marginBottom: 10 }}>

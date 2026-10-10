@@ -1,0 +1,8 @@
+app.xani.app-pngs-0 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\build\generated\res\pngs\release
+app.xani.app-updated_navigation_xml-1 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\build\generated\updated_navigation_xml\release
+app.xani.app-packageReleaseResources-2 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\build\intermediates\incremental\release\packageReleaseResources\merged.dir
+app.xani.app-packageReleaseResources-3 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\build\intermediates\incremental\release\packageReleaseResources\stripped.dir
+app.xani.app-release-4 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\build\intermediates\merged_res\release\mergeReleaseResources
+app.xani.app-main-5 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\src\main\res
+app.xani.app-release-6 C:\projects\tiktok-global-platform\client-apps\play-ownership-apk\app\src\release\res
+gradleHome-0 C:\Users\kfuei\AppData\Local\Temp\cursor-sandbox-cache\2f94740944f5724e5174f24d38d58cbd\gradle

@@ -31,6 +31,9 @@ data class PersonData(
     /** Gifting rungs reached; null = none yet (nothing is drawn). */
     val senderLevel: LevelData? = null,
     val receiverLevel: LevelData? = null,
+    /** Lifetime gifting totals, in coins: gifted out / received as gifts. */
+    val sentCoins: Long = 0L,
+    val receivedCoins: Long = 0L,
 ) {
     companion object {
         fun from(json: JSONObject) = PersonData(
@@ -51,6 +54,8 @@ data class PersonData(
             badgeMime = json.str("badge_mime"),
             senderLevel = LevelData.fromOrNull(json.obj("sender_level")),
             receiverLevel = LevelData.fromOrNull(json.obj("receiver_level")),
+            sentCoins = json.long("sent_coins"),
+            receivedCoins = json.long("received_coins"),
         )
     }
 }
@@ -113,6 +118,13 @@ class PeopleApi internal constructor(private val api: ApiClient) {
         if (visit) mapOf("visit" to "1") else emptyMap(),
         authenticated = true,
     ) { PersonData.from(it.obj("user") ?: JSONObject()) }
+
+    /** Resolve a share-link username to a user id (public, no auth). */
+    suspend fun resolveUsername(username: String): ApiResponse<Long> =
+        api.get(
+            "/v1/public/profile/${username.trim().removePrefix("@")}",
+            authenticated = false,
+        ) { it.id("id") }
 
     /** Who opened my profile this month, latest first. */
     suspend fun visits(cursor: String = "", limit: Int = 30): ApiResponse<VisitPage> = api.get(

@@ -496,7 +496,7 @@ private fun LiveCard(tile: LiveTile, copy: Copy, showPk: Boolean, onClick: () ->
             // the listing is faces, and a coloured block reads as broken.
             val coverUrl = remember(tile.coverUrl, tile.avatarUrl) {
                 val cover = if (tile.coverUrl.startsWith("http")) tile.coverUrl else MediaConfig.url(tile.coverUrl.ifEmpty { null })
-                cover.ifEmpty { if (tile.avatarUrl.startsWith("http")) tile.avatarUrl else MediaConfig.url(tile.avatarUrl.ifEmpty { null }) }
+                cover.ifEmpty { MediaConfig.avatarUrl(tile.avatarUrl) }
             }
             if (coverUrl.isNotEmpty()) {
                 RemoteImage(url = coverUrl, modifier = Modifier.fillMaxSize(), maxEdge = 720, fallback = Color.Transparent)

@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,9 +39,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.xani.core.net.LiveBannedData
 import app.xani.core.net.LiveChatData
 import app.xani.core.net.LiveModeratorData
 import app.xani.core.net.LivePersonData
+import app.xani.feature.gift.CardTabs
+import app.xani.feature.gift.GiftingPanel
 import app.xani.feature.inbox.EmojiPickSheet
 import app.xani.feature.inbox.QuickReactions
 import app.xani.feature.profile.ProfileStore
@@ -89,11 +93,17 @@ internal fun LiveUserSheet(
     val relations by FollowStore.relations.collectAsState()
     val following = relations[user.id]?.following ?: false
     var pick by remember { mutableStateOf<String?>(null) } // mute | block | mod
+    var tab by remember { mutableIntStateOf(0) }
     val name = user.fullName.ifBlank { user.username }.ifBlank { "…" }
 
     LiveSheet(onClose = onClose) { close ->
+        CardTabs(tab, copy, onSelect = { tab = it }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = rdp(10)))
+        if (tab == 1) {
+            GiftingPanel(userId = user.id, copy = copy, roomId = ui?.roomId ?: 0L, modifier = Modifier.padding(top = rdp(10), bottom = rdp(12)))
+            return@LiveSheet
+        }
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = rdp(20)).padding(bottom = rdp(18)),
+            Modifier.fillMaxWidth().padding(horizontal = rdp(20)).padding(top = rdp(12), bottom = rdp(18)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(
@@ -158,7 +168,12 @@ internal fun LiveUserSheet(
                     }
                     ModRow(copy.t(Copy.LiveMute), Color.White) { pick = "mute" }
                     ModDivider()
-                    ModRow(copy.t(Copy.LiveBlock), Color(0xFFFCD34D)) { pick = "block" }
+                    // One tap, no duration: a block holds for the rest of this
+                    // broadcast and lifts by itself when it ends. The session's
+                    // blocklist (moderation sheet) is where it can be undone.
+                    ModRow(copy.t(Copy.LiveBlockLive), Color(0xFFFCD34D)) {
+                        LiveSession.moderate(user.id, "block") { ok, _ -> if (ok) close() }
+                    }
                     ModDivider()
                     ModRow(copy.t(Copy.LiveKick), Color(0xFFFCA5A5)) {
                         LiveSession.moderate(user.id, "kick") { ok, _ -> if (ok) close() }
@@ -176,15 +191,6 @@ internal fun LiveUserSheet(
             max = 24 * 60,
             copy = copy,
             onPick = { m -> pick = null; LiveSession.moderate(user.id, "mute", m) { ok, _ -> if (ok) onClose() } },
-            onClose = { pick = null },
-        )
-        "block" -> DurationSheet(
-            title = copy.t(Copy.LiveBlockFor),
-            presets = listOf(5, 10, 60),
-            unit = { copy.t(Copy.LiveMinutes, "n" to "$it") },
-            max = 30 * 24 * 60,
-            copy = copy,
-            onPick = { m -> pick = null; LiveSession.moderate(user.id, "block", m) { ok, _ -> if (ok) onClose() } },
             onClose = { pick = null },
         )
         "mod" -> DurationSheet(
@@ -269,63 +275,122 @@ private fun DurationSheet(
     }
 }
 
-/** The host's moderators, with how long each has left; the host may remove them. */
+/**
+ * The host's moderators, with how long each has left; the host may remove
+ * them. Below it, everyone blocked or removed in THIS broadcast — a session
+ * list that empties itself when the live ends — with an Unblock that lets
+ * them back in right away.
+ */
 @Composable
 internal fun LiveModeratorsSheet(copy: Copy, onClose: () -> Unit) {
     val live by LiveSession.state.collectAsState()
     val isHost = live?.role == LiveRole.Host
+    val canMod = live?.canModerate == true
     var items by remember { mutableStateOf<List<LiveModeratorData>?>(null) }
-    LaunchedEffect(Unit) { items = LiveSession.moderators() ?: emptyList() }
+    var bans by remember { mutableStateOf<List<LiveBannedData>?>(null) }
+    LaunchedEffect(Unit) {
+        items = LiveSession.moderators() ?: emptyList()
+        // An older server has no session list; an empty section reads fine.
+        bans = LiveSession.sessionBans() ?: emptyList()
+    }
     LiveSheet(onClose = onClose, background = SolidColor(Color(0xFF17112B))) { _ ->
         Column(Modifier.fillMaxWidth().padding(horizontal = rdp(20)).padding(bottom = rdp(20))) {
-            XaniText(copy.t(Copy.LiveModerators), Type.LabelBold, color = Color.White, fontSizeOverride = 16f)
             val list = items
-            when {
-                list == null -> Spacer(Modifier.height(rdp(80)))
-                list.isEmpty() -> XaniText(
-                    copy.t(Copy.LiveModeratorsNone), Type.Caption, color = Color.White.copy(alpha = 0.55f),
-                    fontSizeOverride = 12f, align = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = rdp(28)),
-                )
-                else -> LazyColumn(
-                    Modifier.fillMaxWidth().heightIn(max = rdp(360)).padding(top = rdp(10)),
-                    verticalArrangement = Arrangement.spacedBy(rdp(6)),
-                ) {
-                    items(list, key = { it.user.id }) { m ->
+            val banned = bans
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = rdp(440)),
+                verticalArrangement = Arrangement.spacedBy(rdp(6)),
+            ) {
+                item(key = "mods-title") {
+                    XaniText(copy.t(Copy.LiveModerators), Type.LabelBold, color = Color.White, fontSizeOverride = 16f)
+                }
+                when {
+                    list == null -> item(key = "mods-wait") { Spacer(Modifier.height(rdp(60))) }
+                    list.isEmpty() -> item(key = "mods-none") {
+                        XaniText(
+                            copy.t(Copy.LiveModeratorsNone), Type.Caption, color = Color.White.copy(alpha = 0.55f),
+                            fontSizeOverride = 12f, align = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = rdp(20)),
+                        )
+                    }
+                    else -> items(list, key = { "mod-" + it.user.id }) { m ->
                         val u = m.user
                         val name = u.fullName.ifBlank { u.username }.ifBlank { "…" }
                         val daysLeft = ((m.expiresMs - System.currentTimeMillis()) / 86_400_000L).coerceAtLeast(0L)
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(rdp(14))).background(Color.White.copy(alpha = 0.05f)).padding(horizontal = rdp(12), vertical = rdp(8)),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(rdp(10)),
-                        ) {
-                            Box(Modifier.pressable(onClick = { PersonRouter.open(u.id) })) {
-                                PersonAvatar(u.id, name, u.avatarUrl, rdp(38), frameUrl = u.frameUrl, frameMime = u.frameMime)
-                            }
-                            Column(Modifier.weight(1f)) {
-                                XaniText(name, Type.LabelBold, color = Color.White, fontSizeOverride = 13f, maxLines = 1)
-                                XaniText(
-                                    if (m.expiresMs > 0) copy.t(Copy.LiveDaysLeft, "n" to "$daysLeft") else "@${u.username}",
-                                    Type.Caption, color = Color.White.copy(alpha = 0.5f), fontSizeOverride = 11f,
-                                )
-                            }
-                            if (isHost) {
-                                Box(
-                                    Modifier
-                                        .clip(RoundedCornerShape(rdp(12)))
-                                        .background(ModDanger.copy(alpha = 0.16f))
-                                        .border(1.dp, ModDanger.copy(alpha = 0.45f), RoundedCornerShape(rdp(12)))
-                                        .pressable(pressedScale = 0.94f, onClick = {
-                                            LiveSession.setModerator(u.id, 0) { ok -> if (ok) items = list.filterNot { it.user.id == u.id } }
-                                        })
-                                        .padding(horizontal = rdp(12), vertical = rdp(7)),
-                                ) { XaniText(copy.t(Copy.LiveStageRemove), Type.LabelBold, color = Color(0xFFFCA5A5), fontSizeOverride = 11f) }
-                            }
-                        }
+                        PersonRow(
+                            user = u,
+                            line = if (m.expiresMs > 0) copy.t(Copy.LiveDaysLeft, "n" to "$daysLeft") else "@${u.username}",
+                            action = if (isHost) copy.t(Copy.LiveStageRemove) else null,
+                            onAction = {
+                                LiveSession.setModerator(u.id, 0) { ok -> if (ok) items = list.filterNot { it.user.id == u.id } }
+                            },
+                        )
+                    }
+                }
+                item(key = "bans-title") {
+                    XaniText(
+                        copy.t(Copy.LiveBlockedTitle), Type.LabelBold, color = Color.White, fontSizeOverride = 16f,
+                        modifier = Modifier.padding(top = rdp(14)),
+                    )
+                }
+                when {
+                    banned == null -> item(key = "bans-wait") { Spacer(Modifier.height(rdp(40))) }
+                    banned.isEmpty() -> item(key = "bans-none") {
+                        XaniText(
+                            copy.t(Copy.LiveBlockedNone), Type.Caption, color = Color.White.copy(alpha = 0.55f),
+                            fontSizeOverride = 12f, align = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = rdp(20)),
+                        )
+                    }
+                    else -> items(banned, key = { "ban-" + it.user.id }) { b ->
+                        val what = if (b.reason == "kicked") copy.t(Copy.LiveRemovedTag) else copy.t(Copy.LiveBlockedTag)
+                        PersonRow(
+                            user = b.user,
+                            line = if (b.active) what else what + " · " + copy.t(Copy.LiveBanOver),
+                            action = if (canMod && b.active) copy.t(Copy.LiveUnblock) else null,
+                            onAction = {
+                                LiveSession.moderate(b.user.id, "unblock") { ok, _ ->
+                                    if (ok) bans = banned.filterNot { it.user.id == b.user.id }
+                                }
+                            },
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+/** One person line in the moderation sheet: picture, name, a caption, one action. */
+@Composable
+private fun PersonRow(
+    user: LivePersonData,
+    line: String,
+    action: String?,
+    onAction: () -> Unit,
+) {
+    val name = user.fullName.ifBlank { user.username }.ifBlank { "…" }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(rdp(14))).background(Color.White.copy(alpha = 0.05f)).padding(horizontal = rdp(12), vertical = rdp(8)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(rdp(10)),
+    ) {
+        Box(Modifier.pressable(onClick = { PersonRouter.open(user.id) })) {
+            PersonAvatar(user.id, name, user.avatarUrl, rdp(38), frameUrl = user.frameUrl, frameMime = user.frameMime)
+        }
+        Column(Modifier.weight(1f)) {
+            XaniText(name, Type.LabelBold, color = Color.White, fontSizeOverride = 13f, maxLines = 1)
+            XaniText(line, Type.Caption, color = Color.White.copy(alpha = 0.5f), fontSizeOverride = 11f, maxLines = 1)
+        }
+        if (action != null) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(rdp(12)))
+                    .background(ModDanger.copy(alpha = 0.16f))
+                    .border(1.dp, ModDanger.copy(alpha = 0.45f), RoundedCornerShape(rdp(12)))
+                    .pressable(pressedScale = 0.94f, onClick = onAction)
+                    .padding(horizontal = rdp(12), vertical = rdp(7)),
+            ) { XaniText(action, Type.LabelBold, color = Color(0xFFFCA5A5), fontSizeOverride = 11f) }
         }
     }
 }
@@ -383,6 +448,9 @@ internal fun LiveChatReactOverlay(
                 corner = rdp(12),
                 badgeSize = rdp(14),
                 onUser = { onClose(); onUser() },
+                likeLabel = copy.t(Copy.LiveSentLike),
+                enterLabel = copy.t(Copy.LiveEnteredRoom),
+                leaveLabel = copy.t(Copy.LiveLeftRoom),
             )
             Pill(copy.t(Copy.LiveViewProfile), Modifier.fillMaxWidth().padding(top = rdp(10)), fill = Color.White.copy(alpha = 0.08f), outline = Color.White.copy(alpha = 0.16f)) {
                 onClose(); onUser()

@@ -1,7 +1,9 @@
-﻿import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState, type FormEvent, Fragment } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import {
+  MEMBER_STATUS,
+  REQ_STATUS,
   ROLE_STATUS,
   personLabel,
   reachLabel,
@@ -18,6 +20,7 @@ import {
 import { Button } from '../ui/Button'
 import { Card, Field, TextArea } from '../ui/Field'
 import { PageLoader } from '../ui/Loader'
+import { RevokeDrawer, TransferDrawer } from '../ui/MemberActions'
 import { Select, StatusPill } from '../ui/Org'
 import { FormBuilder, FormPreview } from '../ui/RoleForm'
 
@@ -48,12 +51,13 @@ type Tab = 'details' | 'permissions' | 'hierarchy' | 'form' | 'members' | 'histo
 const defaultPolicy = (): Policy => ({
   approval: { mode: 'parent', ttl_hours: 336 },
   recruitment: { self_apply: false, referral_apply: true },
+  membership: { leave_upline: false, remove_downline: false, shift_upline: false },
 })
 
 export function RolesPage() {
   const { ref } = useParams()
   const navigate = useNavigate()
-  const { can } = useAuth()
+  const { canAny } = useAuth()
   const [catalog, setCatalog] = useState<EngineCatalog | null>(null)
   const [roles, setRoles] = useState<RoleView[]>([])
   const [includeRetired, setIncludeRetired] = useState(false)
@@ -61,7 +65,7 @@ export function RolesPage() {
   const [error, setError] = useState('')
   const [ok, setOk] = useState('')
 
-  const canCreate = can('roles.create') || can('admin.manage_roles')
+  const canCreate = canAny('roles.create') || canAny('admin.manage_roles')
 
   const load = useCallback(async () => {
     const [c, l] = await Promise.all([rolesApi.catalog(), rolesApi.list(includeRetired)])
@@ -311,17 +315,19 @@ function RoleDetail({
   onDeleted: () => void
   onError: (m: string) => void
 }) {
-  const { can } = useAuth()
+  const { can, canAny } = useAuth()
   const [tab, setTab] = useState<Tab>('details')
   const [busy, setBusy] = useState(false)
-  const manage = can('admin.manage_roles')
+  const manage = canAny('admin.manage_roles')
   const canUpdate = manage || can('roles.update') || can('roles.manage_hierarchy') || can('roles.manage_recruitment')
   const canPerms = manage || can('roles.manage_permissions')
   const canHierarchy = manage || can('roles.manage_hierarchy')
   const canForm = manage || can('roles.manage_recruitment')
-  const canSuspend = manage || can('roles.suspend')
-  const canRetire = manage || can('roles.retire')
+  const canSuspend = manage || canAny('roles.suspend')
+  const canRetire = manage || canAny('roles.retire')
   const retired = role.status === ROLE_STATUS.retired
+  // User (default for every signup) and Administrator cannot be deleted/suspended.
+  const protectedRole = role.id === 1 || role.slug === 'user' || role.id === 10 || role.slug === 'administrator'
   const [retiring, setRetiring] = useState(false)
 
   const setStatus = async (status: number, label: string) => {
@@ -367,17 +373,17 @@ function RoleDetail({
               Activate
             </Button>
           ) : null}
-          {!retired && canSuspend && role.status === ROLE_STATUS.active && !role.is_system ? (
+          {!retired && canSuspend && role.status === ROLE_STATUS.active && !protectedRole ? (
             <Button size="sm" variant="secondary" loading={busy} onClick={() => void setStatus(ROLE_STATUS.suspended, 'suspended')}>
               Suspend
             </Button>
           ) : null}
-          {!retired && canRetire && !role.is_system && role.status !== ROLE_STATUS.draft ? (
+          {!retired && canRetire && !protectedRole && role.status !== ROLE_STATUS.draft ? (
             <Button size="sm" variant="danger" loading={busy} onClick={() => setRetiring((v) => !v)}>
               Delete role…
             </Button>
           ) : null}
-          {canRetire && !role.is_system && role.status === ROLE_STATUS.draft ? (
+          {canRetire && !protectedRole && role.status === ROLE_STATUS.draft ? (
             <Button size="sm" variant="danger" loading={busy} onClick={() => void remove()}>
               Delete draft
             </Button>
@@ -482,7 +488,15 @@ function RetirePanel({
   const [target, setTarget] = useState('')
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
-  const targets = roles.filter((r) => r.id !== role.id && r.status === ROLE_STATUS.active && !r.is_system)
+  const targets = roles.filter(
+    (r) =>
+      r.id !== role.id &&
+      r.status === ROLE_STATUS.active &&
+      r.id !== 1 &&
+      r.slug !== 'user' &&
+      r.id !== 10 &&
+      r.slug !== 'administrator',
+  )
 
   const submit = async () => {
     if (hasMembers && mode === 'transfer' && !target) {
@@ -864,11 +878,17 @@ function HierarchyForm({
 }
 
 function MembersTab({ role }: { role: RoleView }) {
+  const { can } = useAuth()
   const [q, setQ] = useState('')
   const [items, setItems] = useState<Membership[]>([])
   const [next, setNext] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [ok, setOk] = useState('')
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [action, setAction] = useState<{ kind: 'transfer' | 'revoke'; m: Membership } | null>(null)
+  const canTransfer = can('memberships.transfer')
+  const canRevoke = can('memberships.revoke')
 
   const load = useCallback(
     async (cursor: string, append: boolean) => {
@@ -891,10 +911,22 @@ function MembersTab({ role }: { role: RoleView }) {
     return () => clearTimeout(t)
   }, [load])
 
+  const flash = (msg: string) => {
+    setOk(msg)
+    window.setTimeout(() => setOk(''), 5000)
+  }
+
+  const live = (m: Membership) => m.status === MEMBER_STATUS.active || m.status === MEMBER_STATUS.suspended
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+        People holding this role. Expand a row to see their downline chain; Shift moves them (or their downline) under
+        another upline; Revoke removes the role and notifies that person when approved.
+      </p>
       <Field label="Search members" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Username, name or referral code" />
       {error ? <div className="err-banner">{error}</div> : null}
+      {ok ? <div className="ok-banner">{ok}</div> : null}
       {items.length === 0 && !loading ? (
         <p className="muted">No one holds this role{q ? ' matching that search' : ' yet'}.</p>
       ) : (
@@ -902,28 +934,231 @@ function MembersTab({ role }: { role: RoleView }) {
           <table className="table">
             <thead>
               <tr>
+                <th style={{ width: 36 }} />
                 <th>Member</th>
                 <th>Their code</th>
-                <th>Joined with</th>
                 <th>Status</th>
                 <th>Direct downline</th>
                 <th>Since</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((m) => {
+                const open = expanded === m.id
+                return (
+                  <Fragment key={m.id}>
+                    <tr>
+                      <td>
+                        {m.direct_children > 0 ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setExpanded(open ? null : m.id)}
+                            aria-label={open ? 'Hide downline' : 'Show downline'}
+                          >
+                            {open ? '▾' : '▸'}
+                          </Button>
+                        ) : (
+                          <span className="muted">·</span>
+                        )}
+                      </td>
+                      <td>
+                        <Link to={`/members/${m.id}`}>{personLabel(m)}</Link>
+                        <div className="muted">@{m.username}</div>
+                      </td>
+                      <td>{m.referral_code ? <span className="org-code">{m.referral_code}</span> : <span className="muted">—</span>}</td>
+                      <td>
+                        <StatusPill kind="s" status={m.status} />
+                      </td>
+                      <td>{m.direct_children}</td>
+                      <td>{when(m.approved_at || m.created_at)}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <Link to={`/members/${m.id}`}>
+                            <Button size="sm" variant="ghost">
+                              View
+                            </Button>
+                          </Link>
+                          {canTransfer && live(m) ? (
+                            <Button size="sm" variant="secondary" onClick={() => setAction({ kind: 'transfer', m })}>
+                              Shift
+                            </Button>
+                          ) : null}
+                          {canRevoke && live(m) ? (
+                            <Button size="sm" variant="danger" onClick={() => setAction({ kind: 'revoke', m })}>
+                              Revoke
+                            </Button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {open ? (
+                      <tr>
+                        <td colSpan={7} style={{ background: 'var(--surface-2, var(--surface))', padding: '12px 16px' }}>
+                          <MemberDownlinePanel
+                            rootId={m.id}
+                            rootLabel={personLabel(m)}
+                            onTransfer={(child) => setAction({ kind: 'transfer', m: child })}
+                            onRevoke={(child) => setAction({ kind: 'revoke', m: child })}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {next ? (
+        <div className="form-actions">
+          <Button variant="secondary" loading={loading} onClick={() => void load(next, true)}>
+            Load more
+          </Button>
+        </div>
+      ) : null}
+      {action?.kind === 'transfer' ? (
+        <TransferDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(v.status === REQ_STATUS.approved ? 'Shift completed.' : `Shift request ${v.code} sent for approval.`)
+            void load('', false)
+            setExpanded(null)
+          }}
+        />
+      ) : null}
+      {action?.kind === 'revoke' ? (
+        <RevokeDrawer
+          m={action.m}
+          onClose={() => setAction(null)}
+          onDone={(v) => {
+            setAction(null)
+            flash(
+              v.status === REQ_STATUS.approved
+                ? 'Role revoked — the person was notified.'
+                : `Revoke request ${v.code} sent for approval. They will be notified when it is approved.`,
+            )
+            void load('', false)
+            setExpanded(null)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** Expandable downline under a role member — full chain with Shift / Revoke. */
+function MemberDownlinePanel({
+  rootId,
+  rootLabel,
+  onTransfer,
+  onRevoke,
+}: {
+  rootId: string
+  rootLabel: string
+  onTransfer: (m: Membership) => void
+  onRevoke: (m: Membership) => void
+}) {
+  const { can } = useAuth()
+  const [depth, setDepth] = useState(0)
+  const [items, setItems] = useState<Membership[]>([])
+  const [next, setNext] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const canTransfer = can('memberships.transfer')
+  const canRevoke = can('memberships.revoke')
+
+  const load = useCallback(
+    async (cursor: string, append: boolean) => {
+      setLoading(true)
+      const r = await rolesApi.downline(rootId, { depth, cursor })
+      setLoading(false)
+      if (!r.ok) {
+        setError(r.message)
+        return
+      }
+      setError('')
+      setItems((prev) => (append ? [...prev, ...(r.data.items || [])] : r.data.items || []))
+      setNext(r.data.next_cursor || '')
+    },
+    [rootId, depth],
+  )
+
+  useEffect(() => {
+    void load('', false)
+  }, [load])
+
+  const live = (m: Membership) => m.status === MEMBER_STATUS.active || m.status === MEMBER_STATUS.suspended
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <strong style={{ fontSize: 13 }}>
+          Downline under {rootLabel}
+        </strong>
+        <Select label="Levels" value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
+          <option value={1}>Direct only</option>
+          <option value={2}>2 levels</option>
+          <option value={3}>3 levels</option>
+          <option value={0}>Everyone below</option>
+        </Select>
+      </div>
+      {error ? <div className="err-banner">{error}</div> : null}
+      {loading && items.length === 0 ? (
+        <PageLoader label="Loading downline…" />
+      ) : items.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>
+          Nobody below this member.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Level</th>
+                <th>Member</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Direct downline</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {items.map((m) => (
                 <tr key={m.id}>
+                  <td>{m.tree_depth ?? m.depth}</td>
                   <td>
                     <Link to={`/members/${m.id}`}>{personLabel(m)}</Link>
                     <div className="muted">@{m.username}</div>
                   </td>
-                  <td>{m.referral_code ? <span className="org-code">{m.referral_code}</span> : <span className="muted">—</span>}</td>
-                  <td>{m.joined_code ? <span className="org-code">{m.joined_code}</span> : <span className="muted">—</span>}</td>
+                  <td>
+                    <Link to={`/roles/${m.role.slug}`}>{m.role.title}</Link>
+                  </td>
                   <td>
                     <StatusPill kind="s" status={m.status} />
                   </td>
                   <td>{m.direct_children}</td>
-                  <td>{when(m.approved_at || m.created_at)}</td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <Link to={`/members/${m.id}`} className="muted" style={{ fontSize: 12 }}>
+                        View
+                      </Link>
+                      {canTransfer && live(m) ? (
+                        <Button size="sm" variant="secondary" onClick={() => onTransfer(m)}>
+                          Shift
+                        </Button>
+                      ) : null}
+                      {canRevoke && live(m) ? (
+                        <Button size="sm" variant="danger" onClick={() => onRevoke(m)}>
+                          Revoke
+                        </Button>
+                      ) : null}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1123,9 +1358,55 @@ function PolicyEditor({ value, onChange, disabled }: { value: Policy; onChange: 
           </span>
         </label>
       </div>
+      <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>Member self-service</div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        What members of this role may do about their own place in the tree, from the app. Everything is off by
+        default and re-checked server-side.
+      </div>
+      <div className="perm-grid">
+        <label className="perm-check">
+          <input
+            type="checkbox"
+            disabled={disabled}
+            checked={mem(value).leave_upline}
+            onChange={(e) => onChange({ ...value, membership: { ...mem(value), leave_upline: e.target.checked } })}
+          />
+          <span>
+            <strong>Can leave upline</strong>
+            <div className="muted">Detaches at once with a required reason; the upline is informed. Role and downline are kept.</div>
+          </span>
+        </label>
+        <label className="perm-check">
+          <input
+            type="checkbox"
+            disabled={disabled}
+            checked={mem(value).remove_downline}
+            onChange={(e) => onChange({ ...value, membership: { ...mem(value), remove_downline: e.target.checked } })}
+          />
+          <span>
+            <strong>Can remove downline</strong>
+            <div className="muted">A direct downline can be removed from the role with a required reason; the member is informed.</div>
+          </span>
+        </label>
+        <label className="perm-check">
+          <input
+            type="checkbox"
+            disabled={disabled}
+            checked={mem(value).shift_upline}
+            onChange={(e) => onChange({ ...value, membership: { ...mem(value), shift_upline: e.target.checked } })}
+          />
+          <span>
+            <strong>Can shift to another upline</strong>
+            <div className="muted">The member asks with the new upline's referral code; the new upline approves or rejects.</div>
+          </span>
+        </label>
+      </div>
     </div>
   )
 }
+
+/** Roles saved before the self-service switches have no membership section. */
+const mem = (p: Policy) => p.membership ?? { leave_upline: false, remove_downline: false, shift_upline: false }
 
 function PermissionReachEditor({
   perms,

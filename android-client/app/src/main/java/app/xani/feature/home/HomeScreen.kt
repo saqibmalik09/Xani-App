@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -34,8 +36,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.xani.core.device.DeviceClass
 import app.xani.core.device.rememberReduceMotion
+import app.xani.core.isolate.runFeature
 import app.xani.core.net.AuthState
+import app.xani.core.net.Perm
 import app.xani.core.net.Xani
+import app.xani.core.net.can
+import app.xani.feature.call.LiveRole
+import app.xani.feature.call.LiveSession
 import app.xani.feature.notify.PushRouter
 import app.xani.feature.social.FollowStore
 import app.xani.feature.social.PersonRouter
@@ -67,6 +74,13 @@ fun HomeScreen(
     val reduceMotion = rememberReduceMotion()
 
     var lane by rememberSaveable { mutableStateOf(HomeLane.ForYou) }
+    // Live is a permission, not a given: without it the tab is not drawn, and
+    // an account sitting on the lane when it is revoked is moved off it. The
+    // grant lands on the realtime stream, so this flips while the app is open.
+    val canLive = can(Perm.LiveView)
+    LaunchedEffect(canLive) {
+        if (!canLive && lane == HomeLane.Live) lane = HomeLane.ForYou
+    }
     var muted by rememberSaveable { mutableStateOf(false) }
     var page by rememberSaveable { mutableIntStateOf(0) }
     var paused by remember { mutableStateOf(false) }
@@ -80,7 +94,13 @@ fun HomeScreen(
     var askingPassword by remember { mutableStateOf<LiveTile?>(null) }
     var passwordWrong by remember { mutableStateOf(false) }
     var roomPassword by remember { mutableStateOf("") }
-    val openLive: (LiveTile) -> Unit = { tile ->
+    val openLive: (LiveTile) -> Unit = open@{ tile ->
+        // My own broadcast is minimized behind the shell's LIVE card: opening
+        // someone else's room would have to end mine first, which is never a
+        // side effect of browsing. The session refuses too; this keeps the
+        // viewer surface from even opening on a dead end.
+        val mine = LiveSession.state.value
+        if (mine != null && mine.role == LiveRole.Host && !mine.over) return@open
         minimized = null
         if (tile.locked) {
             viewing = null
@@ -158,20 +178,40 @@ fun HomeScreen(
         if (active && lane == HomeLane.Live && signedIn) LiveDirectory.watch()
     }
     val liveTiles: List<LiveTile> = remember(directory.rooms) { directory.rooms.map { it.toTile() } }
-    // "X is live" tapped: open that room once the directory lists it; a room
-    // that already ended never appears, so the request lapses.
+    // Shared / push "open this room": join by id at once. Waiting on the
+    // directory misses rooms that are not on the first page (or when Live
+    // tab is not watching). Join itself answers ended / locked / friends.
     val liveRequest by PushRouter.liveRequest.collectAsState()
-    LaunchedEffect(liveRequest, liveTiles) {
-        val want = liveRequest ?: return@LaunchedEffect
-        liveTiles.firstOrNull { it.roomId == want }?.let {
-            PushRouter.liveRequest.value = null
-            openLive(it)
-        }
-    }
     LaunchedEffect(liveRequest) {
-        if (liveRequest == null) return@LaunchedEffect
-        kotlinx.coroutines.delay(10_000)
+        val want = liveRequest ?: return@LaunchedEffect
+        if (!canLive) {
+            PushRouter.liveRequest.value = null
+            return@LaunchedEffect
+        }
         PushRouter.liveRequest.value = null
+        lane = HomeLane.Live
+        val known = liveTiles.firstOrNull { it.roomId == want }
+        if (known != null) {
+            openLive(known)
+            return@LaunchedEffect
+        }
+        // Peek so a locked room asks for the password before joining, and a
+        // still-named host paints while Connecting — not a blank "Live" stub.
+        val room = runFeature(null as app.xani.core.net.LiveRoomData?) {
+            Xani.calls.liveGet(want).value
+        }
+        openLive(
+            room?.toTile() ?: LiveTile(
+                id = want,
+                host = "",
+                name = "Live",
+                viewers = "0",
+                category = "",
+                initials = "L",
+                color = 0xFF6D28D9,
+                roomId = want,
+            ),
+        )
     }
     // A viewer keeps following the room it opened even as the card moves or leaves the list.
     LaunchedEffect(liveTiles) {
@@ -279,6 +319,7 @@ fun HomeScreen(
         if (topAlpha > 0.01f) {
             HomeTopBar(
                 lane = lane,
+                showLive = canLive,
                 onLane = {
                     lane = it
                     page = 0
@@ -385,6 +426,7 @@ fun HomeScreen(
 @Composable
 private fun HomeTopBar(
     lane: HomeLane,
+    showLive: Boolean,
     onLane: (HomeLane) -> Unit,
     onSearch: () -> Unit,
     copy: Copy,
@@ -404,12 +446,14 @@ private fun HomeTopBar(
             modifier = Modifier.align(Alignment.Center),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LaneTab(
-                label = copy.t(Copy.HomeLive),
-                selected = lane == HomeLane.Live,
-                onClick = { onLane(HomeLane.Live) },
-                liveDot = true,
-            )
+            if (showLive) {
+                LaneTab(
+                    label = copy.t(Copy.HomeLive),
+                    selected = lane == HomeLane.Live,
+                    onClick = { onLane(HomeLane.Live) },
+                    liveDot = true,
+                )
+            }
             LaneTab(
                 label = copy.t(Copy.HomeFollowing),
                 selected = lane == HomeLane.Following,
@@ -451,6 +495,10 @@ private fun LaneTab(
             .padding(horizontal = rdp(14), vertical = rdp(6)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Balances the underline band below the label so the text — not the
+        // whole column — is the tab's vertical centre. That keeps the search /
+        // bell icon (centred in the bar) on the same line as "For you".
+        Spacer(Modifier.height(rdp(6.5f)))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(rdp(5)),

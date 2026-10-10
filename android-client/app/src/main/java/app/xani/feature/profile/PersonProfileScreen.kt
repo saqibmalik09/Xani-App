@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,14 +55,16 @@ import androidx.compose.ui.unit.dp
 import app.xani.core.device.DeviceClass
 import app.xani.core.media.RemoteImage
 import app.xani.core.net.MediaConfig
+import app.xani.core.net.Perm
 import app.xani.core.net.PersonData
 import app.xani.core.net.PostData
 import app.xani.core.net.Xani
+import app.xani.core.net.can
 import app.xani.feature.home.FeedRepo
+import app.xani.feature.gift.GiftingPanel
 import app.xani.feature.home.PostViewer
 import app.xani.feature.inbox.InboxController
 import app.xani.feature.social.AvatarFrame
-import app.xani.feature.social.FollowButton
 import app.xani.feature.social.FollowStore
 import app.xani.feature.social.LevelMark
 import app.xani.feature.social.NameBadge
@@ -107,6 +110,8 @@ fun PersonProfileScreen(
     var viewing by remember(userId) { mutableStateOf<PostData?>(null) }
     /** The picture, opened big — a circle in the middle, not a full-width sheet. */
     var pictureOpen by remember(userId) { mutableStateOf(false) }
+    /** 0 posts grid, 1 gifting record. */
+    var tab by remember(userId) { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) { slide.animateTo(0f, tween(260, easing = FastOutSlowInEasing)) }
 
@@ -282,52 +287,114 @@ fun PersonProfileScreen(
                             }
                         }
 
+                        // Lifetime gifting, both directions; a tap opens the record below.
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = rdp(10)),
+                            horizontalArrangement = Arrangement.spacedBy(rdp(10)),
+                        ) {
+                            GiftTotalCard(
+                                label = copy.t(Copy.ProfileSending),
+                                value = compact(person?.sentCoins ?: 0L),
+                                modifier = Modifier.weight(1f),
+                                onClick = { tab = 1 },
+                            ) { ProfileIco.Coin(Color(0xFFF59E0B), rdp(18)) }
+                            GiftTotalCard(
+                                label = copy.t(Copy.ProfileReceiving),
+                                value = compact(person?.receivedCoins ?: 0L),
+                                modifier = Modifier.weight(1f),
+                                onClick = { tab = 1 },
+                            ) { ProfileIco.Coin(ProfileTokens.AccentDeep, rdp(18)) }
+                        }
+
+                        // Follow and Message: one height, one shape, half the row each.
                         Row(
                             Modifier.fillMaxWidth().padding(top = rdp(12), bottom = rdp(4)),
                             horizontalArrangement = Arrangement.spacedBy(rdp(10)),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(Modifier.weight(1f)) {
-                                FollowButton(
-                                    following = following,
-                                    followsYou = person?.followsYou ?: false,
-                                    copy = copy,
-                                    onClick = { FollowStore.set(userId, !following) },
-                                )
-                            }
-                            Row(
+                            val followsYou = person?.followsYou ?: false
+                            val shape = RoundedCornerShape(rdp(12))
+                            Box(
                                 Modifier
                                     .weight(1f)
-                                    .height(rdp(38))
-                                    .clip(RoundedCornerShape(rdp(20)))
-                                    .background(ProfileTokens.Bg2)
-                                    .border(rdp(1), ProfileTokens.BorderStrong, RoundedCornerShape(rdp(20)))
-                                    .pressable(onClick = {
-                                        person?.let {
-                                            InboxController.shared.requestChat(it)
-                                            PersonRouter.clear()
-                                        }
-                                    }),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
+                                    .height(rdp(42))
+                                    .clip(shape)
+                                    .then(
+                                        if (following) Modifier
+                                            .background(ProfileTokens.Bg2)
+                                            .border(rdp(1), ProfileTokens.BorderStrong, shape)
+                                        else Modifier.background(Brush.linearGradient(listOf(ProfileTokens.Accent, ProfileTokens.AccentDeep))),
+                                    )
+                                    .pressable(onClick = { FollowStore.set(userId, !following) }),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                ProfileIco.Message(ProfileTokens.Text, rdp(15))
-                                Spacer(Modifier.width(rdp(6)))
                                 XaniText(
-                                    copy.t(Copy.ProfileMessage),
+                                    when {
+                                        following -> copy.t(Copy.ProfileFollowingBtn)
+                                        followsYou -> copy.t(Copy.ProfileFollowBack)
+                                        else -> copy.t(Copy.ProfileFollow)
+                                    },
                                     Type.LabelBold,
-                                    color = ProfileTokens.Text,
-                                    fontSizeOverride = 13f,
+                                    color = if (following) ProfileTokens.Text else Color.White,
+                                    fontSizeOverride = 14f,
                                 )
+                            }
+                            // Messaging is a permission: no chat, no button —
+                            // Follow then takes the whole row.
+                            if (can(Perm.Chat)) {
+                                Row(
+                                    Modifier
+                                        .weight(1f)
+                                        .height(rdp(42))
+                                        .clip(shape)
+                                        .background(ProfileTokens.Bg2)
+                                        .border(rdp(1), ProfileTokens.BorderStrong, shape)
+                                        .pressable(onClick = {
+                                            person?.let {
+                                                InboxController.shared.requestChat(it)
+                                                PersonRouter.clear()
+                                            }
+                                        }),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    ProfileIco.Message(ProfileTokens.Text, rdp(16))
+                                    Spacer(Modifier.width(rdp(6)))
+                                    XaniText(
+                                        copy.t(Copy.ProfileMessage),
+                                        Type.LabelBold,
+                                        color = ProfileTokens.Text,
+                                        fontSizeOverride = 14f,
+                                    )
+                                }
                             }
                         }
                     }
 
-                    Box(Modifier.fillMaxWidth().padding(top = rdp(14)).height(rdp(1)).background(ProfileTokens.Border))
+                    // Posts · Gifting: the grid, or their gift record (received;
+                    // the panel honours their privacy setting).
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = rdp(14)),
+                    ) {
+                        ProfileTab(copy.t(Copy.ProfilePosts), tab == 0, Modifier.weight(1f)) { tab = 0 }
+                        ProfileTab(copy.t(Copy.GiftingTabGifting), tab == 1, Modifier.weight(1f)) { tab = 1 }
+                    }
+                    Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Border))
                 }
             }
 
-            if (posts.isEmpty() && (loadedPosts || missing)) {
+            if (tab == 1) {
+                item(span = { GridItemSpan(3) }, key = "gifting") {
+                    GiftingPanel(
+                        userId = userId,
+                        copy = copy,
+                        dark = false,
+                        modifier = Modifier.padding(top = rdp(8)),
+                    )
+                }
+            }
+
+            if (tab == 0 && posts.isEmpty() && (loadedPosts || missing)) {
                 item(span = { GridItemSpan(3) }, key = "empty") {
                     XaniText(
                         copy.t(Copy.ProfileNoPostsYet),
@@ -339,7 +406,7 @@ fun PersonProfileScreen(
                 }
             }
 
-            items(posts, key = { it.id }) { post ->
+            if (tab == 0) items(posts, key = { it.id }) { post ->
                 if (post.id == posts.lastOrNull()?.id && cursor.isNotEmpty()) {
                     LaunchedEffect(post.id) { scope.launch { fetchPosts(cursor.toLongOrNull() ?: 0L) } }
                 }
@@ -368,7 +435,7 @@ private fun PersonPicture(
     size: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val url = MediaConfig.url(person?.avatarUrl?.ifEmpty { null })
+    val url = MediaConfig.avatarUrl(person?.avatarUrl)
     val name = person?.fullName?.ifBlank { person.username }.orEmpty()
     Box(modifier.size(size), contentAlignment = Alignment.Center) {
         Box(
@@ -462,6 +529,58 @@ private fun ReadOnlyStatus(text: String, modifier: Modifier = Modifier) {
                     }
                     onDrawBehind { drawPath(path, ProfileTokens.Text) }
                 },
+        )
+    }
+}
+
+/** One gifting total: icon tile, the number, the direction under it. */
+@Composable
+private fun GiftTotalCard(
+    label: String,
+    value: String,
+    modifier: Modifier,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    Row(
+        modifier
+            .clip(RoundedCornerShape(rdp(12)))
+            .background(ProfileTokens.Bg2)
+            .border(rdp(1), ProfileTokens.Border, RoundedCornerShape(rdp(12)))
+            .pressable(pressedScale = 0.97f, onClick = onClick)
+            .padding(horizontal = rdp(12), vertical = rdp(10)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(rdp(32)).clip(CircleShape).background(ProfileTokens.Bg),
+            contentAlignment = Alignment.Center,
+        ) { icon() }
+        Spacer(Modifier.width(rdp(10)))
+        Column {
+            XaniText(value, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 16f, maxLines = 1)
+            XaniText(label, Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 11f, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun ProfileTab(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier.pressable(pressedScale = 1f, onClick = onClick).padding(top = rdp(10)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        XaniText(
+            label,
+            Type.LabelBold,
+            color = if (selected) ProfileTokens.Text else ProfileTokens.Muted,
+            fontSizeOverride = 14f,
+        )
+        Box(
+            Modifier
+                .padding(top = rdp(8))
+                .width(rdp(36))
+                .height(rdp(2))
+                .background(if (selected) ProfileTokens.Text else Color.Transparent),
         )
     }
 }

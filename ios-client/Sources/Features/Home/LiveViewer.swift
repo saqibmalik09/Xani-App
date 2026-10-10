@@ -12,6 +12,8 @@ struct LiveViewerScreen: View {
     @State private var swipeY: CGFloat = 0
     @State private var exitSheet = false
     @State private var giftSheet = false
+    /// Whose card is open (host pill or a chat name): Profile · Gifting. 0 = none.
+    @State private var cardUserId: Int64 = 0
     // roomId 0: the session only delivers the current room's frames anyway.
     @StateObject private var giftOverlay = GiftOverlayModel(roomId: 0)
     @State private var chatDraft = ""
@@ -137,6 +139,18 @@ struct LiveViewerScreen: View {
                 .zIndex(2)
             }
 
+            if cardUserId != 0 {
+                LivePersonSheet(
+                    userId: cardUserId,
+                    roomId: stream.roomId,
+                    isHost: cardUserId == live.state?.room.hostId,
+                    onClose: { withAnimation(.easeIn(duration: 0.22)) { cardUserId = 0 } }
+                )
+                .id(cardUserId)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(2)
+            }
+
             // Half-mode games layer over the broadcast — catalog sheet + game sheet.
             LiveGamesOverlay(model: games)
         }
@@ -197,6 +211,8 @@ struct LiveViewerScreen: View {
             .background(Color.black.opacity(0.42))
             .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
             .clipShape(Capsule())
+            .contentShape(Capsule())
+            .onTapGesture { openCard(live.state?.room.hostId ?? 0) }
 
             Button(action: {}) {
                 Image(systemName: "ellipsis")
@@ -213,6 +229,11 @@ struct LiveViewerScreen: View {
     }
 
     private var sheetSpring: Animation { .spring(response: 0.38, dampingFraction: 0.86) }
+
+    private func openCard(_ userId: Int64) {
+        guard stream.roomId != 0, userId != 0 else { return }
+        withAnimation(sheetSpring) { cardUserId = userId }
+    }
 
     private var statsRow: some View {
         HStack(spacing: 8 * scale) {
@@ -273,6 +294,8 @@ struct LiveViewerScreen: View {
                         .padding(.horizontal, 9 * scale).padding(.vertical, 5 * scale)
                         .background(Color.black.opacity(0.28))
                         .clipShape(RoundedRectangle(cornerRadius: 12 * scale, style: .continuous))
+                        .contentShape(Rectangle())
+                        .onTapGesture { openCard(m.user.id) }
                         .id(m.stableKey)
                     }
                 }

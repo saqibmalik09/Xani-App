@@ -16,12 +16,10 @@ import java.util.Locale
 
 /**
  * The ring you see when the app is not in front of you: a full-screen,
- * high-importance call notification with Answer / Decline, raised either
- * from the realtime stream (app in background) or from the FCM data message
- * (app killed). Tapping any of it lands in [MainActivity] with the call id
- * and the chosen action; [CallController.openFromNotification] takes it
- * from there. The in-app ring (ringtone, overlay) stays with the controller;
- * this only exists so a locked phone rings at all.
+ * high-importance call notification with Join / End, raised either from the
+ * realtime stream (app in background) or from the FCM data message (app
+ * killed). Tapping any of it lands in [MainActivity] with the call id and the
+ * chosen action; [CallController.openFromNotification] takes it from there.
  */
 object IncomingCallNotifier {
     const val EXTRA_CALL_ID = "xani.call_id"
@@ -32,6 +30,13 @@ object IncomingCallNotifier {
 
     private const val CHANNEL = "calls_incoming"
     private const val NOTIFICATION_ID = 4202
+
+    /** Create the incoming-call channel at process boot so FCM can notify immediately. */
+    fun warm(context: Context) = runFeature(Unit) {
+        val app = context.applicationContext
+        val nm = app.getSystemService(NotificationManager::class.java) ?: return@runFeature
+        ensureChannel(app, nm)
+    }
 
     /** One ring per call: the same id replaces itself, a new id replaces the old ring. */
     fun show(context: Context, callId: Long, callerName: String, video: Boolean) = runFeature(Unit) {
@@ -52,20 +57,21 @@ object IncomingCallNotifier {
             .setContentTitle(name)
             .setContentText(title)
             .setCategory(Notification.CATEGORY_CALL)
-            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setOnlyAlertOnce(true)
+            .setOnlyAlertOnce(false)
             .setContentIntent(open)
             .setFullScreenIntent(open, true)
             .setTimeoutAfter(RING_MS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val person = Person.Builder().setName(name).setImportant(true).build()
+            // Decline = End, Accept = Join — CallStyle paints system Answer/Decline
+            // chrome on the lock screen; shade actions below keep Join / End labels.
             b.setStyle(Notification.CallStyle.forIncomingCall(person, decline, accept).setIsVideo(video))
-        } else {
-            b.addAction(Notification.Action.Builder(null, copy.t(Copy.CallDecline), decline).build())
-            b.addAction(Notification.Action.Builder(null, copy.t(Copy.CallAccept), accept).build())
         }
+        b.addAction(Notification.Action.Builder(null, copy.t(Copy.CallNotifyJoin), accept).build())
+        b.addAction(Notification.Action.Builder(null, copy.t(Copy.CallNotifyEnd), decline).build())
         nm.notify(NOTIFICATION_ID, b.build())
     }
 
@@ -91,15 +97,24 @@ object IncomingCallNotifier {
      * stop). Vibration stays here so a phone on silent-but-vibrate still moves.
      */
     private fun ensureChannel(app: Context, nm: NotificationManager) {
-        if (nm.getNotificationChannel(CHANNEL) != null) return
+        val existing = nm.getNotificationChannel(CHANNEL)
+        if (existing != null) {
+            // Upgrade older installs that created a quieter channel.
+            if (existing.importance < NotificationManager.IMPORTANCE_HIGH) {
+                nm.deleteNotificationChannel(CHANNEL)
+            } else {
+                return
+            }
+        }
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, Copy(Locale.getDefault().language).t(Copy.CallIncomingChannel), NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Incoming voice and video calls"
                 setShowBadge(false)
                 setSound(null, null)
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 900, 600, 900, 600)
-                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-                setBypassDnd(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
             },
         )
     }

@@ -16,6 +16,7 @@ import app.xani.core.net.ConversationData
 import app.xani.core.net.LiveFeed
 import app.xani.core.net.MediaConfig
 import app.xani.core.net.NoticeData
+import app.xani.core.net.Perm
 import app.xani.core.net.PersonData
 import app.xani.core.net.Xani
 import app.xani.core.result.Envelope
@@ -264,6 +265,14 @@ class InboxController private constructor(seed: InboxSnapshot) {
     /** Re-reads the inbox page. Cheap: one indexed read per 50 chats. */
     fun refresh() {
         scope.launch {
+            // Chat can be switched off for this account (role or direct deny).
+            // The notifications lane still has to load — warnings and system
+            // notices live there — so only the conversation read is skipped.
+            if (!Xani.session.can(Perm.Chat)) {
+                loading.value = false
+                loadNotices()
+                return@launch
+            }
             val r = Xani.chat.inbox()
             val page = r.value ?: return@launch
             page.items.forEach { absorb(it, bump = false) }
@@ -580,6 +589,9 @@ class InboxController private constructor(seed: InboxSnapshot) {
      */
     fun requestChat(person: PersonData) {
         if (person.id == 0L || person.id == userId) return
+        // The funnel for "Message" from every surface, so the permission is
+        // checked once here as well as wherever the button is drawn.
+        if (!Xani.session.can(Perm.Chat)) return
         val existing = chats.firstOrNull { !it.group && it.peerId == person.id }
         openRequest.value = (existing ?: openDirect(rowFor(person, id = 0))).id
     }
@@ -1392,6 +1404,7 @@ class InboxController private constructor(seed: InboxSnapshot) {
             MsgKind.Document -> "document"
             MsgKind.Poll -> "poll"
             MsgKind.Event -> "event"
+            MsgKind.System -> "system"
         }
 
         private fun localKind(k: String): MsgKind = when (k) {
@@ -1403,6 +1416,7 @@ class InboxController private constructor(seed: InboxSnapshot) {
             "document" -> MsgKind.Document
             "poll" -> MsgKind.Poll
             "event" -> MsgKind.Event
+            "system" -> MsgKind.System
             else -> MsgKind.Text
         }
 
@@ -1465,7 +1479,21 @@ internal fun previewOf(msg: ChatMessage): String = when (msg.kind) {
     MsgKind.Poll -> "📊 ${pollQuestion(msg.text)}"
     MsgKind.Event -> "📅 ${msg.text.lineSequence().firstOrNull().orEmpty()}"
     MsgKind.Ai -> msg.text.ifBlank { "✨ AI image" }
+    MsgKind.System -> callPreview(msg.text) ?: msg.text.ifBlank { "Update" }
     MsgKind.Text -> msg.text
+}
+
+private fun callPreview(text: String): String? {
+    val call = parseCallMsg(text) ?: return null
+    val label = if (call.video) "Video call" else "Voice call"
+    return when (call.status) {
+        "ongoing" -> "📞 $label · Ongoing"
+        "declined" -> "📞 Declined ${label.lowercase()}"
+        "missed" -> "📞 Missed ${label.lowercase()}"
+        "cancelled" -> "📞 Cancelled ${label.lowercase()}"
+        "busy" -> "📞 Busy"
+        else -> if (call.durationSec > 0) "📞 $label · ${formatCallClock(call.durationSec)}" else "📞 $label"
+    }
 }
 
 /**

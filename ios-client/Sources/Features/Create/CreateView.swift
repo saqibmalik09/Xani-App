@@ -61,7 +61,6 @@ private struct PostStudio: View {
     @State private var front = false
     @State private var flash = false
     @State private var mode = ShootMode.fifteen
-    @State private var more = false
     @State private var textPost = false
     @State private var camOk = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
     @State private var thumb: URL?
@@ -75,6 +74,7 @@ private struct PostStudio: View {
     @State private var grid = false
     @State private var timerSec = 0
     @ObservedObject private var session = CreateSession.shared
+    @ObservedObject private var postLens = LensStore.post
 
     private var cameraNeed: Bool { active && !textPost && composing == nil }
     private var capSec: Int {
@@ -93,7 +93,7 @@ private struct PostStudio: View {
             VStack(spacing: 0) {
                 Color.clear.frame(height: insets.top + 56 * scale)
                 ZStack {
-                    CameraPreview(front: front, enabled: cameraNeed && camOk, snap: snap)
+                    CameraPreview(front: front, enabled: cameraNeed && camOk, snap: snap, lens: LensStore.post)
                     if grid {
                         gridOverlay.allowsHitTesting(false)
                     }
@@ -169,6 +169,7 @@ private struct PostStudio: View {
         }
         .animation(.easeInOut(duration: 0.38), value: textPost)
         .onAppear { requestCam() }
+        .onDisappear { LensStore.post.reset() }
         .onChange(of: active) { on in if on { requestCam() } }
         .task(id: recording) {
             guard recording else { return }
@@ -223,7 +224,7 @@ private struct PostStudio: View {
                 grid.toggle()
             } icon: { CreateIco.grid(grid ? .white : CreateTokens.toolDim, side: 22 * scale) }
             labeledTool(Copy.t(.createSpeed)) { } icon: { CreateIco.speed(.white, side: 22 * scale) }
-            labeledTool(Copy.t(.createBeauty)) { more.toggle() } icon: { CreateIco.beauty(.white, side: 22 * scale) }
+            labeledTool(Copy.t(.createBeauty), active: !postLens.state.identity) { } icon: { CreateIco.beauty(.white, side: 22 * scale) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.top, insets.top + 108 * scale)
@@ -233,6 +234,7 @@ private struct PostStudio: View {
     private var bottomChrome: some View {
         VStack(spacing: 12 * scale) {
             if !recording { modeRail }
+            LensTray(controller: LensStore.post, compact: recording)
             // Figma record row: gallery pinned left, capture ring always centered.
             ZStack {
                 if !recording {

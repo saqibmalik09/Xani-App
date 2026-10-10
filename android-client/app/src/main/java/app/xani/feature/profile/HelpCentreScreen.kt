@@ -136,20 +136,26 @@ private fun HelpChrome(
         Modifier
             .fillMaxSize()
             .background(ProfileTokens.Bg2)
-            .statusBarsPadding()
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
+        // The white of the header runs up behind the status bar (no grey strip
+        // above it), and the title keeps a clear gap from the back arrow.
         Row(
             Modifier
                 .fillMaxWidth()
                 .background(Color.White)
+                .statusBarsPadding()
                 .padding(horizontal = rdp(20), vertical = rdp(16)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(rdp(40)).pressable(onClick = onBack), contentAlignment = Alignment.Center) {
                 ProfileIco.Back(ProfileTokens.Text)
             }
-            XaniText(title, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 17f)
+            Spacer(Modifier.width(rdp(10)))
+            XaniText(
+                title, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 17f,
+                maxLines = 1, modifier = Modifier.weight(1f),
+            )
         }
         Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Hairline))
         content()

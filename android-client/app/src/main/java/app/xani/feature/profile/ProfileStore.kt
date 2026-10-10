@@ -67,7 +67,7 @@ enum class ProfileFilter { Posts, Private, Saved, Liked }
 
 enum class ProfileSort { Latest, Popular }
 
-enum class ProfileStatsKind { Following, Followers, Receiving }
+enum class ProfileStatsKind { Following, Followers, Sending, Receiving }
 
 enum class ProfileGender { Male, Female, PreferNot }
 
@@ -85,6 +85,10 @@ enum class ProfileRoute {
     GiftRecord,
     Transactions,
     Withdraw,
+    Balance,
+    Recharge,
+    SellerHub,
+    CoinSellers,
     Share,
     Notifications,
     Blocked,
@@ -92,6 +96,10 @@ enum class ProfileRoute {
     Report,
     Terms,
     Roles,
+    Moderation,
+    FindFriends,
+    MyLive,
+    MyRewards,
 }
 
 /** One grid cell. [views] doubles as the searchable label; [likes] is the count shown. */
@@ -159,6 +167,8 @@ data class ProfileSnapshot(
     val followers: String,
     /** People who opened this profile, as the header shows it ("1.2K"). */
     val profileViews: String,
+    /** Lifetime gifting: what this account has sent, and what it has taken in. */
+    val sending: String,
     val receiving: String,
     val coins: String,
     val diamonds: String,
@@ -562,8 +572,9 @@ object ProfileStore {
                 followers = compact(data.followers.toLong()),
                 following = compact(data.following.toLong()),
                 profileViews = compact(data.profileViews),
-                // What gifting has brought in over the account's life, the
-                // same number the receiver level is cut from.
+                // What gifting has moved over the account's life — the same two
+                // numbers the sender and receiver levels are cut from.
+                sending = compact(data.sentCoins),
                 receiving = compact(data.receivedCoins),
                 senderLevel = data.senderLevel,
                 receiverLevel = data.receiverLevel,
@@ -706,6 +717,7 @@ private val Seed = ProfileSnapshot(
     following = "0",
     followers = "0",
     profileViews = "0",
+    sending = "0",
     receiving = "0",
     coins = "0",
     diamonds = "0",

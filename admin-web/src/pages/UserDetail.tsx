@@ -112,6 +112,23 @@ export function UserDetailPage() {
         <Link to="/users" className="muted" style={{ fontWeight: 600 }}>
           ← Users
         </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginLeft: 'auto' }}>
+          {can('admin.manage_permissions') ? (
+            <Link to={`/users/${id}/permissions`} style={{ fontWeight: 600 }}>
+              Permissions →
+            </Link>
+          ) : null}
+          {can('finance.view_ledger') ? (
+            <Link to={`/users/${id}/ledger`} style={{ fontWeight: 600 }}>
+              Ledger · where coins came from and went →
+            </Link>
+          ) : null}
+          {can('finance.manage_recharge') ? (
+            <Link to={`/recharge?user_id=${id}`} style={{ fontWeight: 600 }}>
+              Recharge requests →
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       <Card>

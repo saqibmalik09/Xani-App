@@ -74,6 +74,7 @@ internal fun ProfileSettingsScreen(
                 items = listOf(
                     copy.t(Copy.ProfileSwitchAccounts) to "switch",
                     passwordLabel to "password",
+                    copy.t(Copy.FindFriendsTitle) to "find_friends",
                 ),
                 onAction = onAction,
             )

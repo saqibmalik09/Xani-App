@@ -90,8 +90,17 @@ internal fun ProfileShareScreen(
     val context = LocalContext.current
     val brand = LocalBrand.current
     val scope = rememberCoroutineScope()
-    val link = MediaConfig.profileLink(snapshot.username)
     val tagline = copy.t(Copy.ProfileShareTagline, "app" to brand.name)
+
+    // The profile link backs Copy / Share only; it is never shown on screen.
+    suspend fun ensureLink(): String {
+        var u = MediaConfig.profileLink(snapshot.username)
+        if (u.isEmpty()) {
+            runFeature(false) { MediaConfig.refresh() }
+            u = MediaConfig.profileLink(snapshot.username)
+        }
+        return u
+    }
 
     // The card is recorded as it is drawn, so "save" writes exactly the pixels
     // on screen instead of a second, slightly different, rendering of it.
@@ -103,7 +112,7 @@ internal fun ProfileShareScreen(
         saving = true
         scope.launch {
             val bitmap = runCatching { card.toImageBitmap().asAndroidBitmap() }.getOrNull()
-            val name = "${brand.wordmark}-${snapshot.username.ifBlank { "profile" }}-${System.currentTimeMillis()}.png"
+            val name = "${brand.slug}-${snapshot.username.ifBlank { "profile" }}-${System.currentTimeMillis()}.png"
             val ok = bitmap != null && saveToGallery(context, bitmap, name)
             saving = false
             onToast(copy.t(if (ok) Copy.ProfileShareSaved else Copy.ProfileShareSaveFailed))
@@ -146,6 +155,30 @@ internal fun ProfileShareScreen(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                // The surface the card sits on, in the card's own colours. Drawn,
+                // not composed, and kept pale: the header above and the actions
+                // below are dark-on-light and have to stay readable. The saved
+                // picture records only the card, so none of this reaches it.
+                .drawBehind {
+                    drawRect(
+                        Brush.verticalGradient(
+                            0f to Color(0xFFF5F1FF),
+                            0.55f to Color(0xFFFDF1F7),
+                            1f to Color(0xFFFFF8EE),
+                        ),
+                    )
+                    // A glow under the card lifts it off the wash rather than
+                    // leaving it pasted on a flat panel.
+                    drawCircle(
+                        Brush.radialGradient(
+                            listOf(Color(0x2E8B5CF6), Color.Transparent),
+                            center = center,
+                            radius = size.width * 0.78f,
+                        ),
+                        radius = size.width * 0.78f,
+                        center = center,
+                    )
+                }
                 .padding(horizontal = rdp(28)),
             contentAlignment = Alignment.Center,
         ) {
@@ -154,7 +187,6 @@ internal fun ProfileShareScreen(
                 snapshot = snapshot,
                 handle = "@${snapshot.username}",
                 tagline = tagline,
-                link = link,
                 brandName = brand.name,
                 layer = card,
             )
@@ -171,10 +203,10 @@ internal fun ProfileShareScreen(
                 label = copy.t(Copy.ProfileShare),
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    if (link.isEmpty()) {
-                        onToast(copy.t(Copy.ProfileShareLinkPending))
-                    } else {
-                        shareText(context, snapshot.displayName, "$tagline\n$link")
+                    scope.launch {
+                        val u = ensureLink()
+                        if (u.isEmpty()) onToast(copy.t(Copy.ProfileShareLinkPending))
+                        else shareText(context, snapshot.displayName, "$tagline\n$u")
                     }
                 },
             ) { ProfileIco.Share(Color.White, rdp(20)) }
@@ -183,12 +215,15 @@ internal fun ProfileShareScreen(
                 label = copy.t(Copy.ProfileShareCopy),
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    if (link.isEmpty()) {
-                        onToast(copy.t(Copy.ProfileShareLinkPending))
-                    } else {
-                        context.getSystemService(ClipboardManager::class.java)
-                            ?.setPrimaryClip(ClipData.newPlainText("profile", link))
-                        onToast(copy.t(Copy.ProfileShareLinkCopied))
+                    scope.launch {
+                        val u = ensureLink()
+                        if (u.isEmpty()) {
+                            onToast(copy.t(Copy.ProfileShareLinkPending))
+                        } else {
+                            context.getSystemService(ClipboardManager::class.java)
+                                ?.setPrimaryClip(ClipData.newPlainText("profile", u))
+                            onToast(copy.t(Copy.ProfileShareLinkCopied))
+                        }
                     }
                 },
             ) { ProfileIco.CopyLink(Color.White, rdp(20)) }
@@ -220,7 +255,6 @@ private fun ShareCard(
     snapshot: ProfileSnapshot,
     handle: String,
     tagline: String,
-    link: String,
     brandName: String,
     layer: GraphicsLayer,
 ) {
@@ -325,12 +359,15 @@ private fun ShareCard(
             XaniText(handle, Type.LabelBold, color = Color.White, fontSizeOverride = 14f)
         }
 
+        // Four cells on a card as narrow as 300dp, so they share the width
+        // evenly instead of being spaced apart until the last one clips.
         Row(
-            Modifier.padding(top = rdp(14)),
-            horizontalArrangement = Arrangement.spacedBy(rdp(22)),
+            Modifier.fillMaxWidth().padding(top = rdp(14)),
+            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             CardStat(snapshot.followers, copy.t(Copy.ProfileFollowers))
             CardStat(snapshot.following, copy.t(Copy.ProfileFollowing))
+            CardStat(snapshot.sending, copy.t(Copy.ProfileSending))
             CardStat(snapshot.receiving, copy.t(Copy.ProfileReceiving))
         }
 
@@ -344,28 +381,8 @@ private fun ShareCard(
             align = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        if (link.isNotEmpty()) {
-            Box(
-                Modifier
-                    .padding(top = rdp(8))
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(rdp(12)))
-                    .background(Color.White.copy(alpha = 0.16f))
-                    .border(rdp(1), Color.White.copy(alpha = 0.3f), RoundedCornerShape(rdp(12)))
-                    .padding(horizontal = rdp(12), vertical = rdp(9)),
-                contentAlignment = Alignment.Center,
-            ) {
-                XaniText(
-                    link,
-                    Type.Caption,
-                    color = Color.White,
-                    fontSizeOverride = 12f,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    align = TextAlign.Center,
-                )
-            }
-        }
+        // The link itself is not printed on the card: Copy / Share / Download
+        // carry it. A URL on screen only invites retyping it wrong.
     }
 }
 
@@ -373,7 +390,13 @@ private fun ShareCard(
 private fun CardStat(value: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         XaniText(value, Type.LabelBold, color = Color.White, fontSizeOverride = 15f)
-        XaniText(label, Type.Micro, color = Color.White.copy(alpha = 0.78f), fontSizeOverride = 10f)
+        XaniText(
+            label,
+            Type.Micro,
+            color = Color.White.copy(alpha = 0.78f),
+            fontSizeOverride = 10f,
+            maxLines = 1,
+        )
     }
 }
 

@@ -33,6 +33,7 @@ import app.xani.feature.social.PersonAvatar
 import app.xani.i18n.Copy
 import app.xani.ui.components.LiveSheet
 import app.xani.ui.components.XaniText
+import app.xani.ui.components.pressable
 import app.xani.ui.theme.Type
 import app.xani.ui.theme.rdp
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,8 @@ internal fun LivePeopleSheet(
     roomId: Long,
     viewers: Long,
     copy: Copy,
+    /** A row tapped: their card, in the room. */
+    onUser: (LivePersonData) -> Unit,
     onClose: () -> Unit,
 ) {
     var items by remember(roomId) { mutableStateOf<List<LivePersonData>>(emptyList()) }
@@ -121,7 +124,7 @@ internal fun LivePeopleSheet(
                     verticalArrangement = Arrangement.spacedBy(rdp(4)),
                 ) {
                     items(items, key = { it.id }) { p ->
-                        PersonRow(p, copy)
+                        PersonRow(p, copy, onClick = { onUser(p) })
                     }
                 }
             }
@@ -130,7 +133,7 @@ internal fun LivePeopleSheet(
 }
 
 @Composable
-private fun PersonRow(p: LivePersonData, copy: Copy) {
+private fun PersonRow(p: LivePersonData, copy: Copy, onClick: () -> Unit) {
     val name = p.fullName.ifBlank { p.username }.ifBlank { "…" }
     val handle = if (p.username.isNotBlank()) "@${p.username}" else ""
     val badge = when (p.role) {
@@ -143,6 +146,7 @@ private fun PersonRow(p: LivePersonData, copy: Copy) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(rdp(14)))
             .background(Color.White.copy(alpha = 0.04f))
+            .pressable(pressedScale = 0.98f, onClick = onClick)
             .padding(horizontal = rdp(10), vertical = rdp(8)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(rdp(10)),

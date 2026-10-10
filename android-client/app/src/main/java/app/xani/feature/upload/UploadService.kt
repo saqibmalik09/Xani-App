@@ -10,12 +10,12 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import app.xani.BuildConfig
 import app.xani.MainActivity
 import app.xani.R
 import app.xani.core.isolate.runFeature
 import app.xani.feature.call.BRAND_COLOR
 import app.xani.i18n.Copy
+import app.xani.ui.brand.BrandStore
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,7 +104,7 @@ class UploadService : Service() {
         val pct = (progress * 100).toInt().coerceIn(0, 100)
         val copy = Copy(Locale.getDefault().language)
         val title = if (active) copy.t(Copy.UploadPostingPct, "pct" to pct.toString()) else copy.t(Copy.UploadProcessing)
-        val text = if (count > 1) copy.t(Copy.UploadCount, "n" to count.toString()) else BuildConfig.APP_NAME
+        val text = if (count > 1) copy.t(Copy.UploadCount, "n" to count.toString()) else BrandStore.current.name
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_brand)
             .setColor(BRAND_COLOR)

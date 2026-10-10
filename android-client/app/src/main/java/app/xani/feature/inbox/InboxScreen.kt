@@ -58,9 +58,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import app.xani.core.device.DeviceClass
 import app.xani.core.isolate.LocalFeatureHost
 import app.xani.core.isolate.runFeature
+import app.xani.core.net.Perm
 import app.xani.core.net.PostData
 import app.xani.core.net.StoryGroupData
 import app.xani.core.net.Xani
+import app.xani.core.net.can
 import app.xani.core.result.Envelope
 import app.xani.feature.home.PostViewer
 import app.xani.feature.main.LocalFeedBottomReserve
@@ -98,7 +100,18 @@ fun InboxScreen(
         inbox.attach(context)
         inbox.observeLive()
     }
-    var lane by rememberSaveable { mutableStateOf(InboxLane.Chats) }
+    // Chat is a permission. Without it the lane is not offered and the inbox
+    // opens on notifications — which still has to work, because moderator
+    // warnings land there. The grant arrives on the realtime stream, so this
+    // flips while the app is open.
+    val canChat = can(Perm.Chat)
+    var picked by rememberSaveable { mutableStateOf(InboxLane.Chats) }
+    // Derived, not corrected after the fact: a revoke never draws one frame of
+    // a lane this account is no longer allowed to see.
+    val lane = if (!canChat && picked == InboxLane.Chats) InboxLane.Notifications else picked
+    val lanes = remember(canChat) {
+        InboxLane.entries.filter { canChat || it != InboxLane.Chats }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var overlay by remember { mutableStateOf(InboxOverlay.None) }
@@ -139,14 +152,14 @@ fun InboxScreen(
     LaunchedEffect(inbox.postRequest.value) {
         val postId = inbox.postRequest.value ?: return@LaunchedEffect
         inbox.postRequest.value = null
-        lane = InboxLane.Activity
+        picked = InboxLane.Activity
         runFeature(null) { Xani.media.post(postId) }?.value?.let { viewingPost = it }
     }
     LaunchedEffect(inbox.noticesRequest.value) {
         if (!inbox.noticesRequest.value) return@LaunchedEffect
         inbox.noticesRequest.value = false
         openId = null
-        lane = InboxLane.Notifications
+        picked = InboxLane.Notifications
     }
     LaunchedEffect(inbox.unreadTotal, inbox.chats.size, inbox.muted.value) { onUnread(inbox.unreadTotal) }
     // Opening the Notifications lane is the read: badge clears here and
@@ -238,7 +251,7 @@ fun InboxScreen(
                     .padding(horizontal = rdp(20), vertical = rdp(8)),
                 horizontalArrangement = Arrangement.spacedBy(rdp(6)),
             ) {
-                InboxLane.entries.forEach { tab ->
+                lanes.forEach { tab ->
                     val on = lane == tab
                     val label = when (tab) {
                         InboxLane.Chats -> copy.t(Copy.InboxChats)
@@ -253,7 +266,7 @@ fun InboxScreen(
                             .clip(RoundedCornerShape(rdp(20)))
                             .background(if (on) Brush.linearGradient(listOf(Dark.Primary, Dark.Accent)) else Brush.linearGradient(listOf(Colors.Surface, Colors.Surface)))
                             .then(if (on) Modifier else Modifier.border(rdp(1), Colors.Border, RoundedCornerShape(rdp(20))))
-                            .pressable { lane = tab },
+                            .pressable { picked = tab },
                         contentAlignment = Alignment.Center,
                     ) {
                         XaniText(label, Type.LabelStrong, color = if (on) Color.White else Colors.Sub, fontSizeOverride = 13f)
@@ -872,7 +885,7 @@ internal fun NewGroupScreen(
     val people = inbox.chats.filter { !it.group && (q.isBlank() || it.name.contains(q, true) || it.handle.contains(q, true)) }
     val brand = LocalBrand.current
     val nextId = (inbox.chats.maxOfOrNull { it.id } ?: 0) + 1
-    val link = "https://${brand.wordmark}.app/g/$nextId"
+    val link = "https://${brand.slug}.app/g/$nextId"
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     Column(
         Modifier

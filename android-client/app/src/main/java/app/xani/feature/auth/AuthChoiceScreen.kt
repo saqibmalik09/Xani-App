@@ -38,6 +38,7 @@ import app.xani.ui.theme.Dark
 import app.xani.ui.theme.Colors
 import app.xani.ui.theme.SystemBarIcons
 import app.xani.ui.theme.Type
+import app.xani.ui.theme.WordmarkGradient
 import app.xani.ui.theme.rdp
 
 @Composable
@@ -81,10 +82,22 @@ fun AuthChoiceScreen(
 
             XaniMark(size = rdp(68), modifier = Modifier.revealScale())
 
-            Spacer(Modifier.height(rdp(20)))
+            Spacer(Modifier.height(rdp(10)))
 
             XaniText(
-                text = "Log in to $appName",
+                text = appName,
+                style = Type.Wordmark,
+                brush = WordmarkGradient,
+                align = TextAlign.Center,
+                maxLines = 1,
+                fontSizeOverride = 34f,
+                modifier = Modifier.revealUp(),
+            )
+
+            Spacer(Modifier.height(rdp(14)))
+
+            XaniText(
+                text = "Log in or sign up",
                 style = Type.H1,
                 color = Colors.Text,
                 align = TextAlign.Center,

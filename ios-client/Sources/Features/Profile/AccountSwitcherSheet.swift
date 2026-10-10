@@ -2,6 +2,9 @@ import SwiftUI
 
 /// Account picker: switch between saved accounts, or add another via a one-tap
 /// "Log in to another account" that then offers Create vs Log in.
+///
+/// Whole-surface drag (not just the handle): pull up to 80% of the screen,
+/// pull down to dismiss.
 struct AccountSwitcherSheet: View {
     var onClose: () -> Void
     var onCreateAccount: () -> Void
@@ -12,6 +15,12 @@ struct AccountSwitcherSheet: View {
     @Environment(\.systemSafeInsets) private var insets
 
     @State private var choosing = false
+    @State private var frac: CGFloat = 0.08
+    @State private var dragOrigin: CGFloat?
+
+    private let sheetMax: CGFloat = 0.80
+    private let sheetRest: CGFloat = 0.62
+    private let sheetMin: CGFloat = 0.08
 
     private var activeId: String {
         if case let .signedIn(user, _) = session.state { return user.id }
@@ -19,39 +28,76 @@ struct AccountSwitcherSheet: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            ProfileTokens.sheetScrim
-                .ignoresSafeArea()
-                .onTapGesture(perform: onClose)
+        GeometryReader { geo in
+            let h = geo.size.height
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.42 * Double(frac))
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: dismiss)
 
-            VStack(spacing: 0) {
-                Capsule()
-                    .fill(Color(rgb: 0xE0E0E0))
-                    .frame(width: 36 * scale, height: 4 * scale)
-                    .padding(.top, 12 * scale)
-                    .padding(.bottom, 14 * scale)
+                VStack(spacing: 0) {
+                    Capsule()
+                        .fill(Color(rgb: 0xE0E0E0))
+                        .frame(width: 40 * scale, height: 4 * scale)
+                        .padding(.top, 12 * scale)
+                        .padding(.bottom, 14 * scale)
 
-                if choosing {
-                    choosePane
-                } else {
-                    accountsPane
+                    if choosing {
+                        choosePane
+                    } else {
+                        accountsPane
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.72, alignment: .bottom)
-            .background(
-                LinearGradient(
-                    colors: [Color.white, Color(rgb: 0xF7F7F8)],
-                    startPoint: .top,
-                    endPoint: .bottom
+                .frame(maxWidth: .infinity)
+                .frame(height: h * frac, alignment: .top)
+                .background(
+                    LinearGradient(
+                        colors: [Color.white, Color(rgb: 0xF7F7F8)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 20 * scale, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 20 * scale, style: .continuous))
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                        .onChanged { v in
+                            if dragOrigin == nil { dragOrigin = frac }
+                            let next = (dragOrigin ?? frac) - v.translation.height / h
+                            frac = min(sheetMax, max(sheetMin, next))
+                        }
+                        .onEnded { v in
+                            let origin = dragOrigin ?? frac
+                            dragOrigin = nil
+                            let predicted = origin - v.predictedEndTranslation.height / h
+                            let close = predicted < 0.34 || (v.translation.height > 120 && frac < sheetRest)
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) {
+                                if close {
+                                    frac = sheetMin
+                                } else if frac > 0.72 {
+                                    frac = sheetMax
+                                } else {
+                                    frac = sheetRest
+                                }
+                            }
+                            if close {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: onClose)
+                            }
+                        }
+                )
+            }
         }
+        .ignoresSafeArea()
         .onAppear {
             choosing = false
             session.clearSwitchError()
+            frac = sheetMin
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) { frac = sheetRest }
         }
+    }
+
+    private func dismiss() {
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.9)) { frac = sheetMin }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: onClose)
     }
 
     private var accountsPane: some View {
@@ -83,17 +129,18 @@ struct AccountSwitcherSheet: View {
                     ForEach(session.accounts) { account in
                         accountRow(account)
                     }
+                    // Keep Add inside the list so it stays reachable when the
+                    // sheet is short or the account list scrolls.
+                    actionButton(Copy.t(.profileAddAccount), filled: true, inset: false) {
+                        withAnimation(.easeInOut(duration: 0.2)) { choosing = true }
+                    }
                 }
                 .padding(.horizontal, 16 * scale)
+                .padding(.bottom, insets.bottom + 16 * scale)
             }
-            .frame(maxHeight: 360 * scale)
-
-            actionButton(Copy.t(.profileAddAccount), filled: true) {
-                withAnimation(.easeInOut(duration: 0.2)) { choosing = true }
-            }
-            .padding(.top, 12 * scale)
-            .padding(.bottom, insets.bottom + 16 * scale)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var choosePane: some View {
@@ -134,7 +181,7 @@ struct AccountSwitcherSheet: View {
         }
     }
 
-    private func actionButton(_ label: String, filled: Bool, action: @escaping () -> Void) -> some View {
+    private func actionButton(_ label: String, filled: Bool, inset: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             AppText(
                 label,
@@ -152,7 +199,7 @@ struct AccountSwitcherSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 12 * scale, style: .continuous))
         }
         .buttonStyle(PressScaleStyle(pressedScale: 0.97))
-        .padding(.horizontal, 16 * scale)
+        .padding(.horizontal, inset ? 16 * scale : 0)
     }
 
     private func accountRow(_ account: SavedAccount) -> some View {

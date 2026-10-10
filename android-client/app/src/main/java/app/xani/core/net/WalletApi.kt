@@ -203,7 +203,11 @@ data class TxnPurchasePageData(val items: List<TxnPurchaseData>, val nextCursor:
     }
 }
 
-/** One raw ledger line (signed amounts). */
+/**
+ * One raw ledger line (signed amounts), with its audit trail: a short label
+ * ("Rose ×3", "Recharge via JazzCash"), the person on the other side, and who
+ * caused it when it was not the owner.
+ */
 @Immutable
 data class TxnEntryData(
     val id: Long,
@@ -212,12 +216,18 @@ data class TxnEntryData(
     val coins: Long,
     val diamonds: Long,
     val beans: Long,
+    val note: String,
+    val peer: LiveHostData?,
+    val actor: LiveHostData?,
     val atMs: Long,
 ) {
     companion object {
         fun from(json: JSONObject) = TxnEntryData(
             id = json.id("id"), kind = json.int("kind"), category = json.str("category"),
             coins = json.long("coins"), diamonds = json.long("diamonds"), beans = json.long("beans"),
+            note = json.str("note"),
+            peer = json.obj("peer")?.let(LiveHostData::from)?.takeIf { it.id > 0L },
+            actor = json.obj("actor")?.let(LiveHostData::from)?.takeIf { it.id > 0L },
             atMs = json.long("at_ms"),
         )
     }
@@ -354,8 +364,142 @@ data class WithdrawCreatedData(val request: WithdrawRequestData, val diamonds: L
     }
 }
 
+// ─── recharge ────────────────────────────────────────────────────────────────
+
+/** One thing the user can buy: a fiat price in [currency] for [totalCoins]. */
+@Immutable
+data class RechargePackageData(
+    val id: Long,
+    val title: String,
+    val currency: String,
+    /** Price as a plain decimal string, e.g. "1000.00". */
+    val price: String,
+    val priceMinor: Long,
+    val coins: Long,
+    val bonusCoins: Long,
+    val totalCoins: Long,
+) {
+    companion object {
+        fun from(json: JSONObject) = RechargePackageData(
+            id = json.id("id"), title = json.str("title"), currency = json.str("currency"),
+            price = json.str("price"), priceMinor = json.long("price_minor"),
+            coins = json.long("coins"), bonusCoins = json.long("bonus_coins"), totalCoins = json.long("total_coins"),
+        )
+    }
+}
+
+/** A receiving account the user pays into. */
+@Immutable
+data class RechargeMethodData(
+    val id: Long,
+    val name: String,
+    val title: String,
+    val accountTitle: String,
+    val accountNo: String,
+    val instructions: String,
+) {
+    companion object {
+        fun from(json: JSONObject) = RechargeMethodData(
+            id = json.id("id"), name = json.str("name"), title = json.str("title"),
+            accountTitle = json.str("account_title"), accountNo = json.str("account_no"),
+            instructions = json.str("instructions"),
+        )
+    }
+}
+
+/** Everything the recharge screen needs in one read. */
+@Immutable
+data class RechargeHomeData(
+    val coins: Long,
+    val diamonds: Long,
+    val beans: Long,
+    val country: String,
+    val pendingCount: Int,
+    val packages: List<RechargePackageData>,
+    val methods: List<RechargeMethodData>,
+) {
+    companion object {
+        fun from(json: JSONObject): RechargeHomeData {
+            val b = json.obj("balance")
+            return RechargeHomeData(
+                coins = b?.long("coins") ?: 0L, diamonds = b?.long("diamonds") ?: 0L, beans = b?.long("beans") ?: 0L,
+                country = json.str("country"), pendingCount = json.int("pending_count"),
+                packages = json.objects("packages").map(RechargePackageData::from),
+                methods = json.objects("methods").map(RechargeMethodData::from),
+            )
+        }
+    }
+}
+
+@Immutable
+data class RechargeRequestData(
+    val id: Long,
+    val packageTitle: String,
+    val currency: String,
+    val price: String,
+    val coins: Long,
+    val creditedCoins: Long,
+    val methodName: String,
+    val accountTitle: String,
+    val accountNo: String,
+    val screenshotUrl: String,
+    val userNote: String,
+    val status: WithdrawStatus,
+    val note: String,
+    val createdAtMs: Long,
+    val decidedAtMs: Long,
+) {
+    companion object {
+        fun from(json: JSONObject) = RechargeRequestData(
+            id = json.id("id"), packageTitle = json.str("package_title"), currency = json.str("currency"),
+            price = json.str("price"), coins = json.long("coins"), creditedCoins = json.long("credited_coins"),
+            methodName = json.str("method_name"), accountTitle = json.str("account_title"), accountNo = json.str("account_no"),
+            screenshotUrl = json.str("screenshot_url"), userNote = json.str("user_note"),
+            status = WithdrawStatus.of(json.str("status")), note = json.str("note"),
+            createdAtMs = json.long("created_at_ms"), decidedAtMs = json.long("decided_at_ms"),
+        )
+    }
+}
+
+@Immutable
+data class RechargePageData(val items: List<RechargeRequestData>, val nextCursor: String) {
+    companion object {
+        fun from(json: JSONObject) = RechargePageData(
+            items = json.objects("items").map(RechargeRequestData::from),
+            nextCursor = json.str("next_cursor"),
+        )
+    }
+}
+
 /** Typed wallet endpoints. */
 class WalletApi internal constructor(private val api: ApiClient) {
+
+    // ─── recharge ────────────────────────────────────────────────────────────
+
+    suspend fun rechargeHome(): ApiResponse<RechargeHomeData> =
+        api.get("/v1/me/recharge", authenticated = true) { RechargeHomeData.from(it) }
+
+    /** Uploads the payment screenshot; returns the key to submit with. */
+    suspend fun uploadRechargeProof(bytes: ByteArray, mime: String, ext: String): ApiResponse<String> =
+        api.putBytes(
+            path = "/v1/me/recharge/proof?ext=${java.net.URLEncoder.encode(ext, "UTF-8")}",
+            bytes = bytes,
+            contentType = mime.ifEmpty { "image/jpeg" },
+        ) { it.str("key") }
+
+    /** Submits a payment claim; [clientId] makes a retry land on the same request. */
+    suspend fun recharge(packageId: Long, methodId: Long, screenshotKey: String, note: String, clientId: String): ApiResponse<RechargeRequestData> =
+        api.post(
+            "/v1/me/recharge",
+            jsonOf(
+                "package_id" to packageId.toString(), "method_id" to methodId.toString(),
+                "screenshot_key" to screenshotKey, "note" to note, "client_id" to clientId,
+            ),
+            authenticated = true,
+        ) { RechargeRequestData.from(it.obj("request") ?: JSONObject()) }
+
+    suspend fun recharges(beforeId: Long = 0L, limit: Int = 50): ApiResponse<RechargePageData> =
+        api.get("/v1/me/recharge/requests", page(beforeId, limit), authenticated = true) { RechargePageData.from(it) }
 
     private fun window(from: String, to: String, extra: Map<String, String> = emptyMap()): Map<String, String> {
         val tz = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000

@@ -162,7 +162,7 @@ object FeedRepo {
             // cards so the face on my posts is the one I just set, without
             // re-reading the feed.
             scope.launch {
-                ProfileStore.state.collect { me -> applyMyAvatar(MediaConfig.url(me.avatarUrl.ifEmpty { null })) }
+                ProfileStore.state.collect { me -> applyMyAvatar(MediaConfig.avatarUrl(me.avatarUrl)) }
             }
         }
     }
@@ -693,7 +693,7 @@ object FeedRepo {
                 verified = a.verified,
                 initials = initials(name.ifBlank { a.username }),
                 color = paletteFor(p.authorId),
-                avatarUrl = MediaConfig.url(a.avatarUrl.ifEmpty { null }),
+                avatarUrl = MediaConfig.avatarUrl(a.avatarUrl),
             ),
             description = p.caption,
             sound = if (kind == FeedKind.Video) {
@@ -749,7 +749,7 @@ object FeedRepo {
             liked = c.liked,
             imageUrl = if (c.imageKey.isEmpty()) "" else MediaConfig.url(c.imageKey),
             authorId = c.author.id,
-            avatarUrl = MediaConfig.url(avatar.ifEmpty { null }),
+            avatarUrl = MediaConfig.avatarUrl(avatar),
         )
     }
 

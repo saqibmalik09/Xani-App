@@ -2,6 +2,7 @@ package app.xani.core.net
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,7 +39,14 @@ class SessionManager internal constructor(
 ) : TokenSource {
 
     private val store = SessionStore(context)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // One failing session task must not take the process down: an uncaught throw
+    // in here reaches the thread's default handler, which closes the whole app
+    // mid sign-out instead of landing the user on the next account or the login.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e -> Log.e(TAG, "session task failed", e) },
+    )
     private val refreshLock = Mutex()
     private val switchLock = Mutex()
     private var expiryWatch: Job? = null
@@ -62,6 +70,19 @@ class SessionManager internal constructor(
     private val _switchError = MutableStateFlow("")
     /** One-shot message when a switch fails (banned / expired slot). */
     val switchError: StateFlow<String> = _switchError.asStateFlow()
+
+    /** Guards the logout button against a double tap signing out two accounts. */
+    private val _signingOut = MutableStateFlow(false)
+
+    private val _switching = MutableStateFlow(0L)
+
+    /**
+     * The account id a switch is in flight for, 0 when idle. The picker holds
+     * itself open on this: a switch the server refuses lands back on the
+     * previous account, and closing on the tap would make that look like the
+     * tap did nothing.
+     */
+    val switching: StateFlow<Long> = _switching.asStateFlow()
 
     @Volatile
     private var tokens: Tokens? = null
@@ -97,10 +118,11 @@ class SessionManager internal constructor(
             if (active == null || active.tokens.isRefreshExpired(System.currentTimeMillis())) {
                 if (active != null) {
                     // Drop only the dead slot; try another.
-                    val rest = all.filterNot { it.userId == active.userId }
-                    if (rest.isNotEmpty()) {
-                        persist(rest, rest.first().userId)
-                        activateLocal(rest.first())
+                    val rest = usableSlots(exceptUserId = active.userId)
+                    val next = rest.firstOrNull()
+                    if (next != null) {
+                        persist(rest, next.userId)
+                        activateLocal(next)
                         armExpiryWatch()
                         resync()
                         return@launch
@@ -113,8 +135,7 @@ class SessionManager internal constructor(
                         avatarUrl = active.avatarUrl,
                         passwordLoginActive = active.passwordLoginActive,
                     )
-                    store.clearAll()
-                    _accounts.value = emptyList()
+                    persist(emptyList(), 0L)
                     _sessionExpired.value = true
                 }
                 tokens = null
@@ -149,6 +170,9 @@ class SessionManager internal constructor(
     /** Adopts a freshly issued session from signup, login or Google. */
     fun adopt(session: Session) {
         val now = System.currentTimeMillis()
+        // A renew re-adopts the same account; a login or an added account makes
+        // a different one active, and only that has to re-dial the stream.
+        val changed = currentUserId != session.user.id
         val slot = SavedAccount(
             userId = session.user.id,
             username = session.user.username,
@@ -169,6 +193,7 @@ class SessionManager internal constructor(
         _addAccountStartSignup.value = false
         _state.value = AuthState.SignedIn(session.user, session.access)
         armExpiryWatch()
+        if (changed) LiveFeed.restart()
     }
 
     fun updateUser(user: AccountUser) {
@@ -185,48 +210,76 @@ class SessionManager internal constructor(
      */
     fun switchTo(userId: Long) {
         if (userId == currentUserId) return
+        // Marked before the lock is taken, so the picker sees the switch as in
+        // flight even while it waits behind a resync. One at a time: a second
+        // tap mid-flight would leave the picker reporting the wrong row.
+        if (!_switching.compareAndSet(0L, userId)) return
         scope.launch {
-            switchLock.withLock {
-                val slot = _accounts.value.firstOrNull { it.userId == userId }
-                if (slot == null) {
-                    _switchError.value = "That account isn’t saved on this device."
-                    return@withLock
+            try {
+                switchLock.withLock { switchInto(userId) }
+            } finally {
+                _switching.value = 0L
+            }
+        }
+    }
+
+    private suspend fun switchInto(userId: Long) {
+        val slot = _accounts.value.firstOrNull { it.userId == userId }
+        if (slot == null) {
+            _switchError.value = "That account isn’t saved on this device."
+            return
+        }
+        if (slot.tokens.isRefreshExpired(System.currentTimeMillis())) {
+            removeSlot(userId)
+            _switchError.value = "That account’s session expired. Sign in again."
+            return
+        }
+        // Where to land if the server refuses: the account in use right now,
+        // read before the swap, with whatever tokens it currently holds.
+        val previous = _accounts.value.firstOrNull { it.userId == currentUserId }
+        activateLocal(slot.copy(lastUsedAt = System.currentTimeMillis()))
+        persist(_accounts.value.map {
+            if (it.userId == slot.userId) it.copy(lastUsedAt = System.currentTimeMillis()) else it
+        }.sortedByDescending { it.lastUsedAt }, slot.userId)
+        armExpiryWatch()
+        val response = AuthApi(api).me()
+        when {
+            response.ok && response.data != null -> {
+                val (user, access) = response.data
+                lastKnownUser = user
+                upsertActive(user, access, tokens ?: slot.tokens)
+                _state.value = AuthState.SignedIn(user, access)
+                _switchError.value = ""
+            }
+            response.isTransport -> {
+                // Offline: keep the cached swap; user can use the app.
+                _switchError.value = ""
+            }
+            // The slot is unusable for good — a ban, or a refresh the server has
+            // retired. Forget it and fall back, so the picker stops offering a
+            // row that can never work.
+            response.isSessionExpired || response.code == "blocked" -> dropActiveAndFallback(
+                message = response.message.ifBlank {
+                    if (response.code == "blocked") "This account is blocked or restricted."
+                    else "That account’s session expired. Sign in again."
+                },
+            )
+            // Anything else is this attempt failing, not the account dying. Put
+            // the previous session back and keep the slot: a 500 must not delete
+            // a saved login the user can still sign in to.
+            else -> {
+                if (previous != null) {
+                    val restored = previous.copy(lastUsedAt = System.currentTimeMillis())
+                    activateLocal(restored)
+                    persist(
+                        _accounts.value
+                            .map { if (it.userId == restored.userId) restored else it }
+                            .sortedByDescending { it.lastUsedAt },
+                        restored.userId,
+                    )
+                    armExpiryWatch()
                 }
-                if (slot.tokens.isRefreshExpired(System.currentTimeMillis())) {
-                    removeSlot(userId)
-                    _switchError.value = "That account’s session expired. Sign in again."
-                    return@withLock
-                }
-                activateLocal(slot.copy(lastUsedAt = System.currentTimeMillis()))
-                persist(_accounts.value.map {
-                    if (it.userId == slot.userId) it.copy(lastUsedAt = System.currentTimeMillis()) else it
-                }.sortedByDescending { it.lastUsedAt }, slot.userId)
-                armExpiryWatch()
-                val response = AuthApi(api).me()
-                when {
-                    response.ok && response.data != null -> {
-                        val (user, access) = response.data
-                        lastKnownUser = user
-                        upsertActive(user, access, tokens ?: slot.tokens)
-                        _state.value = AuthState.SignedIn(user, access)
-                        _switchError.value = ""
-                    }
-                    response.isTransport -> {
-                        // Offline: keep the cached swap; user can use the app.
-                        _switchError.value = ""
-                    }
-                    else -> {
-                        val msg = when (response.code) {
-                            "blocked" -> response.message.ifBlank {
-                                "This account is blocked or restricted."
-                            }
-                            else -> response.message.ifBlank {
-                                "Couldn’t switch to that account."
-                            }
-                        }
-                        dropActiveAndFallback(msg)
-                    }
-                }
+                _switchError.value = response.message.ifBlank { "Couldn’t switch to that account." }
             }
         }
     }
@@ -251,50 +304,85 @@ class SessionManager internal constructor(
     fun removeAccount(userId: Long) {
         scope.launch {
             switchLock.withLock {
-                val wasActive = userId == currentUserId
-                val rest = _accounts.value.filterNot { it.userId == userId }
-                if (wasActive) {
-                    val refresh = tokens?.refreshToken
-                    if (!refresh.isNullOrBlank()) {
-                        scope.launch { AuthApi(api).logout(refresh) }
-                    }
-                    if (rest.isNotEmpty()) {
-                        persist(rest, rest.first().userId)
-                        activateLocal(rest.first())
-                        armExpiryWatch()
-                        resync()
-                    } else {
-                        clearActiveLocal()
-                        persist(emptyList(), 0L)
-                        _state.value = AuthState.SignedOut
-                        _sessionExpired.value = false
-                    }
+                if (userId == currentUserId) {
+                    signOutActive()
                 } else {
-                    persist(rest, currentUserId)
+                    persist(_accounts.value.filterNot { it.userId == userId }, currentUserId)
                 }
             }
         }
     }
 
-    /** Signs out the active account only; another saved account becomes active if any. */
+    /**
+     * Signs out the active account and nothing else.
+     *
+     * The next saved login becomes active; only when none is left does the app
+     * fall back to the sign-in wall. A second tap while the first is still in
+     * flight is dropped — re-entering here would sign out the account that just
+     * became active and look like one tap clearing every saved login.
+     */
     fun signOut() {
-        val id = currentUserId
-        if (id == 0L) {
-            clearActiveLocal()
-            store.clearAll()
-            _accounts.value = emptyList()
-            _state.value = AuthState.SignedOut
-            _sessionExpired.value = false
-            _addingAccount.value = false
-            _addAccountStartSignup.value = false
-            return
+        if (!_signingOut.compareAndSet(expect = false, update = true)) return
+        scope.launch {
+            try {
+                switchLock.withLock { signOutActive() }
+            } finally {
+                _signingOut.value = false
+            }
         }
-        removeAccount(id)
     }
 
-    fun expire() {
+    /**
+     * Drops the active slot, then lands on the newest saved account that still
+     * has a live refresh, or on [AuthState.SignedOut] when there is none.
+     *
+     * Never wipes the whole store: a deliberate sign-out of one account must
+     * leave the other saved logins on the device. Never raises
+     * [sessionExpired] either — the user asked to leave an account, and the
+     * blocking sheet would cover the login screen they asked for.
+     *
+     * Caller holds [switchLock].
+     */
+    private suspend fun signOutActive() {
+        val id = currentUserId
+        val refresh = tokens?.refreshToken
+        val rest = usableSlots(exceptUserId = id)
+        clearActiveLocal()
+        _addingAccount.value = false
+        _addAccountStartSignup.value = false
+        _switchError.value = ""
+        _sessionExpired.value = false
+        // Best-effort revoke: the slot is gone locally either way, so an offline
+        // sign-out must not leave the user signed in.
+        if (id != 0L && !refresh.isNullOrBlank()) {
+            scope.launch { AuthApi(api).logout(refresh) }
+        }
+        val next = rest.firstOrNull()
+        if (next == null) {
+            persist(emptyList(), 0L)
+            _state.value = AuthState.SignedOut
+            return
+        }
+        persist(rest, next.userId)
+        activateLocal(next)
+        armExpiryWatch()
+        resync()
+    }
+
+    fun expire() = expire(currentUserId)
+
+    /**
+     * Ends [userId]'s session and falls back to another saved account.
+     *
+     * The id matters: this waits on the switch lock, so by the time it runs the
+     * user may have switched to a different account whose session is perfectly
+     * good. Signing that one out instead would look like the app losing logins
+     * at random.
+     */
+    private fun expire(userId: Long) {
         scope.launch {
             switchLock.withLock {
+                if (userId != currentUserId) return@withLock
                 dropActiveAndFallback(
                     message = "",
                     raiseExpiryIfEmpty = true,
@@ -308,6 +396,7 @@ class SessionManager internal constructor(
     }
 
     private fun activateLocal(slot: SavedAccount) {
+        val changed = currentUserId != slot.userId
         tokens = slot.tokens
         val user = AccountUser.Empty.copy(
             id = slot.userId,
@@ -319,6 +408,10 @@ class SessionManager internal constructor(
         )
         lastKnownUser = user
         _state.value = AuthState.SignedIn(user, slot.access)
+        // A different account means a different bearer on the live stream. Dial
+        // again, or the socket keeps pushing the previous account's profile,
+        // balance and chat over the one that just became active.
+        if (changed) LiveFeed.restart()
     }
 
     private fun upsertActive(user: AccountUser, access: Access, tok: Tokens) {
@@ -349,11 +442,23 @@ class SessionManager internal constructor(
         persist(rest, if (rest.any { it.userId == currentUserId }) currentUserId else rest.firstOrNull()?.userId ?: 0L)
     }
 
+    /**
+     * Saved logins other than [exceptUserId] that can still be activated without
+     * a password, newest-used first. An expired slot would only arm the expiry
+     * watch and bounce straight back, so it is never a fallback target.
+     */
+    private fun usableSlots(exceptUserId: Long): List<SavedAccount> {
+        val now = System.currentTimeMillis()
+        return _accounts.value
+            .filterNot { it.userId == exceptUserId }
+            .filterNot { it.tokens.isRefreshExpired(now) }
+    }
+
     private suspend fun dropActiveAndFallback(message: String, raiseExpiryIfEmpty: Boolean = false) {
         val deadId = currentUserId
         val remembered = lastKnownUser
         val refresh = tokens?.refreshToken
-        val rest = _accounts.value.filterNot { it.userId == deadId }
+        val rest = usableSlots(exceptUserId = deadId)
         clearActiveLocal()
         if (rest.isNotEmpty()) {
             persist(rest, rest.first().userId)
@@ -384,12 +489,13 @@ class SessionManager internal constructor(
     private fun armExpiryWatch() {
         expiryWatch?.cancel()
         val deadline = tokens?.refreshExpiresAtMillis ?: return
+        val owner = currentUserId
         val wait = max(0L, deadline - System.currentTimeMillis())
         expiryWatch = scope.launch {
             delay(wait)
             val current = tokens ?: return@launch
             if (current.isRefreshExpired(System.currentTimeMillis())) {
-                expire()
+                expire(owner)
             }
         }
     }
@@ -402,6 +508,9 @@ class SessionManager internal constructor(
 
     override suspend fun renew(staleToken: String?): String? = refreshLock.withLock {
         val current = tokens
+        // Whose refresh this is. A switch can land on another account before an
+        // expiry queued here is served, and only this account may be dropped.
+        val owner = currentUserId
         if (current != null && current.accessToken != staleToken &&
             !current.isAccessExpired(System.currentTimeMillis())
         ) {
@@ -410,7 +519,7 @@ class SessionManager internal constructor(
 
         val refreshToken = current?.refreshToken
         if (refreshToken.isNullOrBlank() || current.isRefreshExpired(System.currentTimeMillis())) {
-            expire()
+            expire(owner)
             return@withLock null
         }
 
@@ -422,7 +531,7 @@ class SessionManager internal constructor(
             }
             response.isTransport -> null
             else -> {
-                expire()
+                expire(owner)
                 null
             }
         }

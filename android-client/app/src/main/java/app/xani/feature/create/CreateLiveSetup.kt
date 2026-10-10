@@ -60,6 +60,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.xani.core.net.RewardEligibility
+import app.xani.core.net.StageData
 import app.xani.feature.call.rememberCallPermissions
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
@@ -115,6 +117,7 @@ internal fun CreateLiveFlow(
     copy: Copy,
     active: Boolean,
     onPost: () -> Unit,
+    onMinimize: () -> Unit,
 ) {
     val context = LocalContext.current
     var step by rememberSaveable { mutableStateOf(0) } // 0 setup, 1 seats, 2 room
@@ -135,7 +138,7 @@ internal fun CreateLiveFlow(
     val permissions = rememberCallPermissions()
 
     val resolvedSeats = when {
-        seats == -1 -> customSeats.toIntOrNull()?.coerceIn(1, 35) ?: 0
+        seats == -1 -> customSeats.toIntOrNull()?.coerceIn(1, StageData.AudioSeatMax) ?: 0
         seats != null -> seats!!
         else -> 0
     }
@@ -144,6 +147,8 @@ internal fun CreateLiveFlow(
     val passwordOk = audience != LiveAudience.Private || password.isNotBlank()
     val canGoVideo = broadcast == LiveBroadcast.Video && passwordOk
     val canNextAudio = audioReady && passwordOk
+    // "Will this live earn rewards?" — asked per broadcast type, shown under the button.
+    val rewards = rememberRewardEligibility(isVideo = broadcast == LiveBroadcast.Video, live = false)
 
     fun buildConfig(isVideo: Boolean) = LiveRoomConfig(
         isVideo = isVideo,
@@ -184,6 +189,7 @@ internal fun CreateLiveFlow(
                 active = active,
                 config = buildConfig(broadcast == LiveBroadcast.Video),
                 onEnd = { step = 0 },
+                onMinimize = onMinimize,
             )
             else -> LiveSetupForm(
                 copy = copy,
@@ -209,6 +215,7 @@ internal fun CreateLiveFlow(
                 },
                 canGoVideo = canGoVideo,
                 canNextAudio = canNextAudio,
+                rewards = rewards,
                 onClose = onPost,
                 onFlipCam = { frontCam = !frontCam },
                 onGoLive = { permissions(true) { step = 2 } },
@@ -240,6 +247,7 @@ private fun LiveSetupForm(
     onPickCover: (Uri) -> Unit,
     canGoVideo: Boolean,
     canNextAudio: Boolean,
+    rewards: RewardEligibility?,
     onClose: () -> Unit,
     onFlipCam: () -> Unit,
     onGoLive: () -> Unit,
@@ -571,12 +579,13 @@ private fun LiveSetupForm(
                 Spacer(Modifier.height(rdp(72)))
             }
 
-            Box(
+            Column(
                 Modifier
                     .fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, CreateTokens.LiveSetupBg)))
                     .padding(horizontal = rdp(18), vertical = rdp(14)),
             ) {
+                RewardEligibilityChip(copy, rewards)
                 val enabled = if (isVideo) canGoVideo else canNextAudio
                 Box(
                     Modifier

@@ -38,6 +38,7 @@ import app.xani.core.net.GiftDayData
 import app.xani.core.net.GiftStatsData
 import app.xani.core.net.LevelData
 import app.xani.core.net.Xani
+import app.xani.feature.gift.GiftingPanel
 import app.xani.feature.social.LevelMark
 import app.xani.i18n.Copy
 import app.xani.ui.components.LightField
@@ -210,6 +211,22 @@ internal fun GiftRecordScreen(copy: Copy, onBack: () -> Unit) {
                         if (error.isNotEmpty()) {
                             XaniText(error, Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(8)))
                         }
+                    }
+                }
+
+                // Who sent what (and who you sent to): the engine's statement,
+                // top counterparts or latest gifts, live as frames land.
+                item(key = "people") {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = rdp(16))
+                            .padding(top = rdp(14))
+                            .clip(RoundedCornerShape(rdp(16)))
+                            .background(ProfileTokens.Bg2)
+                            .padding(vertical = rdp(10)),
+                    ) {
+                        GiftingPanel(userId = Xani.session.currentUserId, copy = copy, dark = false)
                     }
                 }
 

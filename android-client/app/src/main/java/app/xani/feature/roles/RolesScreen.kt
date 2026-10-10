@@ -46,10 +46,12 @@ import app.xani.core.net.ApiResponse
 import app.xani.core.net.AuthState
 import app.xani.core.net.CodeInfoData
 import app.xani.core.net.FormFieldData
+import app.xani.core.net.JoinLinkData
 import app.xani.core.net.MediaConfig
 import app.xani.core.net.MembershipData
 import app.xani.core.net.MembershipStatus
 import app.xani.core.net.ReferralCodeData
+import app.xani.core.net.RoleBrief
 import app.xani.core.net.RoleRequestData
 import app.xani.core.net.RoleRequestKind
 import app.xani.core.net.RoleRequestPage
@@ -109,10 +111,12 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
     }
     // A referral link tapped: land on "mine" with the join form prefilled.
     var joinPrefill by rememberSaveable { mutableStateOf("") }
+    var joinPrefillRole by rememberSaveable { mutableStateOf("") }
     val routedJoin by RolesRouter.pendingJoin.collectAsState()
     LaunchedEffect(routedJoin) {
-        val c = RolesRouter.consumeJoin() ?: return@LaunchedEffect
-        joinPrefill = c
+        val j = RolesRouter.consumeJoin() ?: return@LaunchedEffect
+        joinPrefill = j.code
+        joinPrefillRole = j.roleSlug
         openMembership = null
         openRequestId = 0L
         tab = RolesTab.Mine
@@ -145,7 +149,7 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
             }
             Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Hairline))
             when (tab) {
-                RolesTab.Mine -> MineTab(copy, joinPrefill, onOpen = { openMembership = it }, onToast = { toast = it })
+                RolesTab.Mine -> MineTab(copy, joinPrefill, joinPrefillRole, onOpen = { openMembership = it }, onToast = { toast = it })
                 RolesTab.Requests -> RequestList(
                     copy = copy,
                     empty = copy.t(Copy.RolesRequestsEmpty),
@@ -195,7 +199,7 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
 // ─── my roles ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun MineTab(copy: Copy, joinPrefill: String, onOpen: (WorkspaceMembershipData) -> Unit, onToast: (String) -> Unit) {
+private fun MineTab(copy: Copy, joinPrefill: String, joinPrefillRole: String, onOpen: (WorkspaceMembershipData) -> Unit, onToast: (String) -> Unit) {
     var memberships by remember { mutableStateOf<List<WorkspaceMembershipData>?>(null) }
     var codes by remember { mutableStateOf<List<ReferralCodeData>>(emptyList()) }
     var failed by remember { mutableStateOf(false) }
@@ -238,7 +242,7 @@ private fun MineTab(copy: Copy, joinPrefill: String, onOpen: (WorkspaceMembershi
             itemsIndexed(codes, key = { _, c -> c.code }) { _, c -> CodeRow(copy, c, onToast) }
         }
         item(key = "join") {
-            JoinWithCode(copy, joinPrefill) { msg ->
+            JoinWithCode(copy, joinPrefill, joinPrefillRole) { msg ->
                 onToast(msg)
                 scope.launch { reloadKey++ }
             }
@@ -289,45 +293,97 @@ private fun MembershipRow(copy: Copy, wm: WorkspaceMembershipData, onClick: () -
 @Composable
 private fun CodeRow(copy: Copy, c: ReferralCodeData, onToast: (String) -> Unit) {
     val context = LocalContext.current
-    // The link opens the join form with the code prefilled; without a public
-    // web host from config, the bare code still shares fine.
-    val link = MediaConfig.joinLink(c.code)
-    Row(
-        Modifier.fillMaxWidth().background(Color.White).padding(horizontal = rdp(18), vertical = rdp(12)),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            XaniText(c.code, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 18f)
+    var picking by remember { mutableStateOf(false) }
+    val targets = c.joinLinks.ifEmpty { c.targetRoles.map { JoinLinkData(it, MediaConfig.joinLink(c.code, it.slug)) } }
+    fun copyCodeOnly() {
+        val cm = context.getSystemService(ClipboardManager::class.java)
+        cm?.setPrimaryClip(ClipData.newPlainText("referral", c.code))
+        onToast(copy.t(Copy.RolesCopied))
+    }
+    fun shareFor(link: JoinLinkData) {
+        val role = link.role
+        val url = link.url.ifBlank { MediaConfig.joinLink(c.code, role.slug) }
+        if (url.isBlank()) {
+            onToast(copy.t(Copy.RolesShareNoWeb))
+            return
+        }
+        val text = copy.t(Copy.RolesShareTextRole, "role" to role.title, "code" to c.code, "link" to url)
+        val cm = context.getSystemService(ClipboardManager::class.java)
+        cm?.setPrimaryClip(ClipData.newPlainText("referral", url))
+        onToast(copy.t(Copy.RolesLinkCopied))
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        runFeature(Unit) { context.startActivity(Intent.createChooser(send, null)) }
+    }
+    Column(Modifier.fillMaxWidth().background(Color.White)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = rdp(18), vertical = rdp(12)),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                XaniText(c.code, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 18f)
+                XaniText(
+                    "${c.role.title} · " + copy.t(
+                        Copy.RolesCodeOpens,
+                        "roles" to targets.joinToString { it.role.title }.ifEmpty { "—" },
+                    ),
+                    Type.Caption,
+                    color = ProfileTokens.Sub,
+                    fontSizeOverride = 12f,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(rdp(8))) {
+                SmallButton(copy.t(Copy.RolesCopyCode), ::copyCodeOnly)
+                SmallButton(copy.t(Copy.RolesShareLink)) {
+                    when {
+                        targets.isEmpty() -> onToast(copy.t(Copy.RolesShareNoRoles))
+                        targets.size == 1 -> shareFor(targets[0])
+                        else -> picking = !picking
+                    }
+                }
+            }
+        }
+        if (picking && targets.size > 1) {
             XaniText(
-                "${c.role.title} · " + copy.t(
-                    Copy.RolesCodeOpens,
-                    "roles" to c.targetRoles.joinToString { it.title }.ifEmpty { "—" },
-                ),
+                copy.t(Copy.RolesSharePickRole),
                 Type.Caption,
                 color = ProfileTokens.Sub,
                 fontSizeOverride = 12f,
+                modifier = Modifier.padding(start = rdp(18), end = rdp(18), bottom = rdp(6)),
             )
-            if (link.isNotEmpty()) {
-                XaniText(link, Type.Caption, color = ProfileTokens.Accent, fontSizeOverride = 12f, maxLines = 1, modifier = Modifier.padding(top = rdp(2)))
+            targets.forEach { link ->
+                val url = link.url.ifBlank { MediaConfig.joinLink(c.code, link.role.slug) }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(onClick = {
+                            picking = false
+                            shareFor(link)
+                        })
+                        .padding(horizontal = rdp(18), vertical = rdp(10)),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        XaniText(link.role.title, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 14f)
+                        if (url.isNotEmpty()) {
+                            XaniText(url, Type.Caption, color = ProfileTokens.Accent, fontSizeOverride = 11f, maxLines = 1)
+                        } else {
+                            XaniText(copy.t(Copy.RolesShareNoWeb), Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 11f, maxLines = 2)
+                        }
+                    }
+                    ProfileIco.Chevron(Color(0xFFCCCCCC), rdp(15))
+                }
+                Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.RowLine))
             }
-        }
-        SmallButton(copy.t(Copy.RolesShareCode)) {
-            val text = if (link.isEmpty()) c.code else copy.t(Copy.RolesShareText, "code" to c.code, "link" to link)
-            val cm = context.getSystemService(ClipboardManager::class.java)
-            cm?.setPrimaryClip(ClipData.newPlainText("referral", text))
-            onToast(copy.t(Copy.RolesCopied))
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, text)
-            }
-            runFeature(Unit) { context.startActivity(Intent.createChooser(send, null)) }
         }
     }
     Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.RowLine))
 }
 
 @Composable
-private fun JoinWithCode(copy: Copy, prefill: String, onDone: (String) -> Unit) {
+private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDone: (String) -> Unit) {
     var code by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
     var info by remember { mutableStateOf<CodeInfoData?>(null) }
@@ -339,21 +395,29 @@ private fun JoinWithCode(copy: Copy, prefill: String, onDone: (String) -> Unit) 
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
 
-    // A tapped referral link lands here with the code already known.
-    LaunchedEffect(prefill) {
+    // A tapped referral link lands here with the code (and often the role) known.
+    LaunchedEffect(prefill, prefillRole) {
         if (prefill.isNotEmpty() && prefill != code) code = prefill
+        if (prefillRole.isNotEmpty()) roleSlug = prefillRole
     }
     LaunchedEffect(code) {
         info = null
         error = ""
-        roleSlug = ""
+        val keepRole = roleSlug
         val t = code.trim()
         if (t.length < 4) return@LaunchedEffect
         delay(350)
         val r = runFeature(null as ApiResponse<CodeInfoData>?) { Xani.roles.lookupCode(t) } ?: return@LaunchedEffect
         if (r.ok && r.data != null) {
             info = r.data
-            if (r.data.targetRoles.size == 1) roleSlug = r.data.targetRoles[0].slug
+            val targets = r.data.targetRoles
+            roleSlug = when {
+                keepRole.isNotEmpty() && targets.any { it.slug.equals(keepRole, ignoreCase = true) } ->
+                    targets.first { it.slug.equals(keepRole, ignoreCase = true) }.slug
+                targets.size == 1 -> targets[0].slug
+                keepRole.isNotEmpty() -> keepRole
+                else -> ""
+            }
         } else {
             error = r.message
         }
@@ -389,13 +453,22 @@ private fun JoinWithCode(copy: Copy, prefill: String, onDone: (String) -> Unit) 
                 fontSizeOverride = 12f,
                 modifier = Modifier.padding(top = rdp(8)),
             )
-            if (i.targetRoles.size > 1) {
+            if (i.targetRoles.size > 1 && prefillRole.isEmpty()) {
                 XaniText(copy.t(Copy.RolesPickRole), Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 13f, modifier = Modifier.padding(top = rdp(10), bottom = rdp(6)))
                 Row(horizontalArrangement = Arrangement.spacedBy(rdp(8))) {
                     for (t in i.targetRoles) {
                         TabChip(Modifier, t.title, roleSlug == t.slug) { roleSlug = t.slug }
                     }
                 }
+            } else if (roleSlug.isNotEmpty()) {
+                val title = i.targetRoles.firstOrNull { it.slug == roleSlug }?.title ?: roleSlug
+                XaniText(
+                    copy.t(Copy.RolesApplyingAs, "role" to title),
+                    Type.Caption,
+                    color = ProfileTokens.Accent,
+                    fontSizeOverride = 12f,
+                    modifier = Modifier.padding(top = rdp(8)),
+                )
             }
             val fields = form
             if (roleSlug.isNotEmpty()) {
@@ -433,9 +506,8 @@ private fun JoinWithCode(copy: Copy, prefill: String, onDone: (String) -> Unit) 
                     busy = true
                     error = ""
                     scope.launch {
-                        val snapshot = answers.toMap()
                         val r = runFeature(null as ApiResponse<RoleRequestData>?) {
-                            if (i.targetRoles.size > 1) Xani.roles.apply(code, roleSlug, note, snapshot) else Xani.roles.redeem(code, note, snapshot)
+                            Xani.roles.apply(code, roleSlug, note, answers.toMap())
                         }
                         busy = false
                         if (r == null || !r.ok) {
@@ -458,12 +530,16 @@ private fun JoinWithCode(copy: Copy, prefill: String, onDone: (String) -> Unit) 
 
 @Composable
 private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: () -> Unit, onToast: (String) -> Unit) {
-    BackHandler(onBack = onBack)
     val m = wm.membership
     val canAdd = m.isActive && wm.recruit.any { it.canAssign }
     var adding by rememberSaveable(m.id) { mutableStateOf(false) }
     var managing by remember(m.id) { mutableStateOf<MembershipData?>(null) }
     var upline by remember(m.id) { mutableStateOf<List<MembershipData>?>(null) }
+    // "" | "leave" | "shift": the member's own upline action, drawn in place
+    // of the lists. The buttons come from role policy (workspace actions);
+    // the server re-checks both on submit.
+    var selfAct by rememberSaveable(m.id) { mutableStateOf("") }
+    var uplineKey by remember(m.id) { mutableStateOf(0) }
     var whole by rememberSaveable(m.id) { mutableStateOf(false) }
     val items = remember(m.id, whole) { mutableStateListOf<MembershipData>() }
     var cursor by remember(m.id, whole) { mutableStateOf("") }
@@ -471,8 +547,10 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
     var loading by remember(m.id, whole) { mutableStateOf(false) }
     var failed by remember(m.id, whole) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val back: () -> Unit = { if (selfAct.isNotEmpty()) selfAct = "" else onBack() }
+    BackHandler(onBack = back)
 
-    LaunchedEffect(m.id) {
+    LaunchedEffect(m.id, uplineKey) {
         upline = runFeature(emptyList()) { Xani.roles.upline(m.id).value ?: emptyList() }
     }
 
@@ -498,7 +576,7 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
             Modifier.fillMaxWidth().background(Color.White).padding(horizontal = rdp(20), vertical = rdp(16)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(rdp(40)).pressable(onClick = onBack), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(rdp(40)).pressable(onClick = back), contentAlignment = Alignment.Center) {
                 ProfileIco.Back(ProfileTokens.Text)
             }
             Column(Modifier.weight(1f)) {
@@ -507,9 +585,19 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                     XaniText("${copy.t(Copy.RolesYourCode)} ${m.referralCode}", Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 12f)
                 }
             }
-            if (canAdd) SmallButton("+ " + copy.t(Copy.RolesAddMember)) { adding = true }
+            if (canAdd && selfAct.isEmpty()) SmallButton("+ " + copy.t(Copy.RolesAddMember)) { adding = true }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        when (selfAct) {
+            "leave" -> LeaveUplineForm(copy, m.id, upline?.firstOrNull()) { msg ->
+                selfAct = ""
+                uplineKey++
+                onToast(msg)
+            }
+            "shift" -> ShiftUplineForm(copy, m.id) { msg ->
+                selfAct = ""
+                onToast(msg)
+            }
+            else -> LazyColumn(Modifier.fillMaxSize()) {
             item(key = "upline-title") { SectionTitle(copy.t(Copy.RolesUpline)) }
             item(key = "upline") {
                 val chain = upline
@@ -527,6 +615,20 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                         chain.asReversed().forEachIndexed { level, u ->
                             PersonRow(u, copy, indent = level, sub = "${u.role.title} · @${u.username}")
                         }
+                    }
+                }
+            }
+            // Role-policy self-service: leave needs an upline to leave; shift
+            // is offered whenever the role allows it. Both re-checked server-side.
+            val hasUpline = upline?.isNotEmpty() == true
+            if ((wm.actions.leaveUpline && hasUpline) || wm.actions.shiftUpline) {
+                item(key = "upline-actions") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = rdp(18), vertical = rdp(8)),
+                        horizontalArrangement = Arrangement.spacedBy(rdp(10)),
+                    ) {
+                        if (wm.actions.shiftUpline) SmallButton(copy.t(Copy.RolesShiftUpline)) { selfAct = "shift" }
+                        if (wm.actions.leaveUpline && hasUpline) SmallButton(copy.t(Copy.RolesLeaveUpline)) { selfAct = "leave" }
                     }
                 }
             }
@@ -571,6 +673,7 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                     LaunchedEffect(d.id) { fetch(cursor) }
                 }
             }
+            } // LazyColumn (the `else` branch of the selfAct switch)
         }
     }
 
@@ -597,6 +700,134 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                 managing = null
                 onToast(msg)
                 scope.launch { fetch("") }
+            },
+        )
+    }
+}
+
+/**
+ * Leave my upline: the role and my downline stay with me, only the link up is
+ * cut — immediately, with a required reason the upline is shown. The policy
+ * gate and everything else is re-checked server-side.
+ */
+@Composable
+private fun LeaveUplineForm(copy: Copy, membershipId: Long, upline: MembershipData?, onDone: (String) -> Unit) {
+    var reason by rememberSaveable(membershipId) { mutableStateOf("") }
+    var error by remember(membershipId) { mutableStateOf("") }
+    var busy by remember(membershipId) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().padding(rdp(18))) {
+        XaniText(copy.t(Copy.RolesLeaveUpline), Type.LabelBold, color = ProfileTokens.Danger, fontSizeOverride = 16f)
+        upline?.let {
+            XaniText(
+                "${it.displayName} · ${it.role.title}",
+                Type.Caption,
+                color = ProfileTokens.Sub,
+                fontSizeOverride = 13f,
+                modifier = Modifier.padding(top = rdp(4)),
+            )
+        }
+        XaniText(
+            copy.t(Copy.RolesLeaveUplineHint),
+            Type.Caption,
+            color = ProfileTokens.Sub,
+            fontSizeOverride = 12f,
+            modifier = Modifier.padding(top = rdp(6), bottom = rdp(12)),
+        )
+        LightField(
+            value = reason,
+            onValueChange = { reason = it },
+            placeholder = copy.t(Copy.RolesReasonPlaceholder),
+            capitalization = KeyboardCapitalization.Sentences,
+            imeAction = ImeAction.Done,
+            maxChars = 300,
+        )
+        if (error.isNotEmpty()) {
+            XaniText(error, Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(10)))
+        }
+        Spacer(Modifier.height(rdp(16)))
+        OutlineCta(copy.t(Copy.RolesLeaveUpline), ProfileTokens.Danger, busy, !busy) {
+            if (reason.isBlank()) {
+                error = copy.t(Copy.RolesReasonRequired)
+                return@OutlineCta
+            }
+            busy = true
+            error = ""
+            scope.launch {
+                val r = runFeature(null as ApiResponse<MembershipData>?) { Xani.roles.leaveUpline(membershipId, reason) }
+                busy = false
+                if (r == null || !r.ok) {
+                    error = r?.message ?: copy.t(Copy.RolesLoadFailed)
+                    return@launch
+                }
+                onDone(r.message.ifBlank { copy.t(Copy.RolesActDone) })
+            }
+        }
+    }
+}
+
+/**
+ * Change upline: enter the new upline's referral code; the move happens only
+ * after that upline approves the request (the server notifies them).
+ */
+@Composable
+private fun ShiftUplineForm(copy: Copy, membershipId: Long, onDone: (String) -> Unit) {
+    var code by rememberSaveable(membershipId) { mutableStateOf("") }
+    var note by rememberSaveable(membershipId) { mutableStateOf("") }
+    var error by remember(membershipId) { mutableStateOf("") }
+    var busy by remember(membershipId) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().padding(rdp(18))) {
+        XaniText(copy.t(Copy.RolesShiftUpline), Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 16f)
+        XaniText(
+            copy.t(Copy.RolesShiftUplineHint),
+            Type.Caption,
+            color = ProfileTokens.Sub,
+            fontSizeOverride = 12f,
+            modifier = Modifier.padding(top = rdp(6), bottom = rdp(12)),
+        )
+        LightField(
+            value = code,
+            onValueChange = { code = it.uppercase() },
+            placeholder = copy.t(Copy.RolesShiftCodePlaceholder),
+            imeAction = ImeAction.Next,
+            maxChars = 32,
+        )
+        Spacer(Modifier.height(rdp(10)))
+        LightField(
+            value = note,
+            onValueChange = { note = it },
+            placeholder = copy.t(Copy.RolesNotePlaceholder),
+            capitalization = KeyboardCapitalization.Sentences,
+            imeAction = ImeAction.Done,
+            maxChars = 300,
+        )
+        if (error.isNotEmpty()) {
+            XaniText(error, Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(10)))
+        }
+        Spacer(Modifier.height(rdp(16)))
+        PrimaryCta(
+            text = copy.t(Copy.RolesShiftUpline),
+            enabled = !busy,
+            loading = busy,
+            onClick = {
+                if (code.isBlank()) {
+                    error = copy.t(Copy.RolesShiftCodeRequired)
+                    return@PrimaryCta
+                }
+                busy = true
+                error = ""
+                scope.launch {
+                    val r = runFeature(null as ApiResponse<RoleRequestData>?) { Xani.roles.shiftUpline(membershipId, code, note) }
+                    busy = false
+                    if (r == null || !r.ok) {
+                        error = r?.message ?: copy.t(Copy.RolesLoadFailed)
+                        return@launch
+                    }
+                    onDone(r.message.ifBlank { copy.t(Copy.RolesActDone) })
+                }
             },
         )
     }

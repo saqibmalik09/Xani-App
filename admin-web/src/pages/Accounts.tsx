@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { get } from '../lib/api'
+import { get, post } from '../lib/api'
 import { mediaUrl, useAuth } from '../lib/auth'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Field'
@@ -36,6 +36,7 @@ type Hit = {
   device_count: number
   max_device_accounts: number
   password_login_active?: boolean
+  ghost?: boolean
   created_at: string
 }
 
@@ -68,6 +69,17 @@ export function AccountsPage() {
   const [user, setUser] = useState<Hit | null>(null)
   const [error, setError] = useState('')
   const [loadingUser, setLoadingUser] = useState(false)
+  const [ghostBusy, setGhostBusy] = useState(false)
+
+  const toggleGhost = async (u: Hit) => {
+    if (ghostBusy) return
+    setGhostBusy(true)
+    setError('')
+    const r = await post<{ ghost: boolean }>(`/v1/admin/users/${u.id}/ghost`, { on: !u.ghost })
+    setGhostBusy(false)
+    if (r.ok) setUser((cur) => (cur && cur.id === u.id ? { ...cur, ghost: !u.ghost } : cur))
+    else setError(r.message || 'Could not update ghost mode.')
+  }
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -275,6 +287,7 @@ export function AccountsPage() {
                   <span className={`status-pill ${user.banned || user.state === 2 ? 'off' : 'on'}`}>
                     {stateLabel(user)}
                   </span>
+                  {user.ghost ? <span className="status-pill warn">👻 Ghost</span> : null}
                 </div>
                 <div className="muted">
                   @{user.username} · ID <code>{user.id}</code>
@@ -378,6 +391,25 @@ export function AccountsPage() {
               <dd>{new Date(user.created_at).toLocaleString()}</dd>
               <dt>Screenshots</dt>
               <dd>{user.allow_screenshots ? 'Allowed' : 'Blocked'}</dd>
+              <dt>Ghost mode</dt>
+              <dd>
+                <span className={`status-pill ${user.ghost ? 'warn' : 'off'}`}>
+                  {user.ghost ? 'On' : 'Off'}
+                </span>{' '}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={ghostBusy}
+                  onClick={() => void toggleGhost(user)}
+                >
+                  {ghostBusy ? '…' : user.ghost ? 'Revoke' : 'Grant'}
+                </Button>
+                <span className="muted" style={{ display: 'block', marginTop: 4 }}>
+                  Watches any live unseen — no count, no roster, no join line — and enters
+                  friends-only or locked rooms without a password. Their comments and gifts
+                  show like anyone else&apos;s.
+                </span>
+              </dd>
               <dt>Login password</dt>
               <dd>
                 {user.password_login_active ? (

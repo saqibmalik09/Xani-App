@@ -5,12 +5,16 @@ import android.os.SystemClock
 import android.view.View
 import androidx.compose.runtime.Immutable
 import app.xani.core.isolate.runFeature
+import app.xani.core.net.AppForeground
+import app.xani.core.net.AuthState
 import app.xani.core.net.CallEvent
 import app.xani.core.net.GiftData
 import app.xani.core.net.LiveChatData
 import app.xani.core.net.LiveFeed
 import app.xani.core.net.LiveEnterEvent
+import app.xani.core.net.LiveGameWinEvent
 import app.xani.core.net.LiveGiftEvent
+import app.xani.core.net.LiveBannedData
 import app.xani.core.net.LiveModeratorData
 import app.xani.core.net.bool
 import app.xani.core.net.id
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import app.xani.core.net.LivePersonData
 import app.xani.core.net.LiveRoomData
 import app.xani.core.net.LiveSummaryData
+import app.xani.core.net.LiveTimeView
 import app.xani.core.net.PkData
 import app.xani.core.net.PkInviteData
 import app.xani.core.net.PkStartData
@@ -43,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -86,8 +92,14 @@ data class LiveUi(
     val hostAway: Boolean = false,
     /** Bounded room chat; newest last. Never grows past [ChatCap]. */
     val chat: List<LiveChatData> = emptyList(),
-    /** Coins gifted into this room so far — the room's 💎 pill, the host's earnings. */
+    /** Coins gifted into this room so far (the senders' spend). */
     val roomCoins: Long = 0L,
+    /**
+     * Diamonds actually credited to receivers here after the gift split —
+     * the room's 💎 pill and the host's earnings. Never [roomCoins]: a 70%
+     * policy must show 70 for a 100-coin gift.
+     */
+    val roomDiamonds: Long = 0L,
     /** The stage: seats, policy, who is up. Replaced wholesale on every `live_stage`. */
     val stage: StageData = StageData.Empty,
     /** My seat when on stage (guest); 0 otherwise. */
@@ -108,6 +120,13 @@ data class LiveUi(
     val mutedUntilMs: Long = 0L,
     /** The host's moderators in this room, by user id. */
     val mods: Set<Long> = emptySet(),
+    /**
+     * Host / co-host: the server's verified-time figure from the last ack,
+     * and the monotonic instant it landed. Null for viewers and before the
+     * first ack. The HUD shows [verifiedMs], never the wall clock.
+     */
+    val time: LiveTimeView? = null,
+    val timeAtMs: Long = 0L,
 ) {
     /** Am I publishing (host or on stage)? */
     val onStage: Boolean get() = role != LiveRole.Viewer
@@ -129,6 +148,29 @@ data class LiveUi(
         if (syncAtMs == 0L) return 0L
         return syncDurationSeconds + ((nowMs - syncAtMs) / 1000L).coerceAtLeast(0L)
     }
+
+    /**
+     * Verified milliseconds in this room — the ledger's figure. Between acks
+     * it advances on the monotonic clock while the server is counting, and
+     * stops by itself once the last ack is older than the allowance: that is
+     * the exact moment the server stops crediting, so the host never watches
+     * a number the record will not back. Before the first ack: 0.
+     */
+    fun verifiedMs(nowMs: Long = SystemClock.elapsedRealtime()): Long {
+        val t = time ?: return 0L
+        if (!t.counting) return t.verifiedMs
+        val since = (nowMs - timeAtMs).coerceAtLeast(0L)
+        return t.verifiedMs + minOf(since, t.allowanceSeconds * 1000L)
+    }
+
+    /** Is verified time moving right now (last ack fresh, server counting)? */
+    fun timeCounting(nowMs: Long = SystemClock.elapsedRealtime()): Boolean {
+        val t = time ?: return false
+        return t.counting && nowMs - timeAtMs <= t.allowanceSeconds * 1000L
+    }
+
+    /** Silence inside this room the server did not count, so far. */
+    val pausedMs: Long get() = time?.pausedMs ?: 0L
 
     companion object {
         const val ChatCap = 40
@@ -183,13 +225,31 @@ object LiveSession {
      * Someone with an entrance effect walking into this room. The overlay
      * plays each for a few seconds; a burst of arrivals sheds the oldest —
      * an entrance is a moment, not history.
+     *
+     * A short replay buffer carries the race at the door: the enterer's own
+     * frame (and the host's, on go-live) often lands on the per-user stream
+     * BEFORE the live screen has composed its overlay. With replay, the
+     * overlay collects it the moment it exists; it drops anything stale or
+     * already played by [LiveEnterEvent.receivedAtMs] and a seen-set.
      */
     private val _entrances = MutableSharedFlow<LiveEnterEvent>(
-        replay = 0,
+        replay = 8,
         extraBufferCapacity = 16,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val entrances: SharedFlow<LiveEnterEvent> = _entrances
+
+    /**
+     * Someone, somewhere, won in a game: a short centered strip on every live
+     * screen. Small replay for the compose race; stale frames are dropped by
+     * [LiveGameWinEvent.receivedAtMs] in the overlay.
+     */
+    private val _gameWins = MutableSharedFlow<LiveGameWinEvent>(
+        replay = 4,
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val gameWins: SharedFlow<LiveGameWinEvent> = _gameWins
 
     /** Stage notices for the surface to toast: declined, dropped, seat taken. */
     private val _notices = MutableSharedFlow<LiveNotice>(
@@ -213,8 +273,22 @@ object LiveSession {
     private var attached = false
     private var engine: RtcEngine? = null
     private var room: RtcRoom? = null
-    /** Second SFU seat: publish into the opponent's room during PK. */
+    /** Second SFU seat: subscribe-only, the opponent's room during PK. */
     private var pkRoom: RtcRoom? = null
+    /** A watch-seat request is out; the next frame must not ask again. */
+    private var pkWatchPending = false
+    /** Bumped when the watch seat is dropped, so a reply in flight is stale. */
+    private var pkWatchGen = 0
+    /**
+     * Who is publishing video in each room, read on the UI thread where the
+     * listeners write it. A renderer exists whether or not a track does, so
+     * without this the PK's remote half is a black rectangle instead of the
+     * opponent's HLS or their avatar.
+     */
+    private val mainVideo = HashSet<Long>()
+    private val pkVideo = HashSet<Long>()
+    /** Holds the arena open after the opponent left, then folds it away. */
+    private var pkLeftHold: Job? = null
     private var hold: Job? = null
     private var roomStream: Job? = null
     private var heartbeat: Job? = null
@@ -231,20 +305,46 @@ object LiveSession {
      * themselves; the pill reads this.
      */
     private val coinsSeen = java.util.concurrent.atomic.AtomicLong(0L)
+    private val diamondsSeen = java.util.concurrent.atomic.AtomicLong(0L)
     private var coinsFlush: Job? = null
 
-    private fun noteRoomCoins(total: Long) {
-        if (total <= 0L) return
+    init {
+        // A viewer who backgrounds the app keeps their seat — chat, hearts and
+        // the reconnect clock all survive a quick app switch — but the room
+        // goes silent until they come back. Hosts and on-stage guests are a
+        // call: their audio is kept alive on purpose by the foreground service,
+        // so only off-stage playback is gated here.
+        scope.launch {
+            AppForeground.visible.collect { visible ->
+                val ui = _state.value ?: return@collect
+                if (!ui.onStage) room?.setPlaybackMuted(!visible)
+            }
+        }
+    }
+
+    private fun noteRoomCoins(total: Long, diamonds: Long = -1L) {
+        if (total <= 0L && diamonds <= 0L) return
         var cur = coinsSeen.get()
         while (total > cur) {
             if (coinsSeen.compareAndSet(cur, total)) break
             cur = coinsSeen.get()
         }
+        var curD = diamondsSeen.get()
+        while (diamonds > curD) {
+            if (diamondsSeen.compareAndSet(curD, diamonds)) break
+            curD = diamondsSeen.get()
+        }
         if (coinsFlush?.isActive == true) return
         coinsFlush = scope.launch {
             delay(COINS_TICK_MS)
             val v = coinsSeen.get()
-            update { if (v > it.roomCoins) it.copy(roomCoins = v) else it }
+            val d = diamondsSeen.get()
+            update {
+                var ui = it
+                if (v > ui.roomCoins) ui = ui.copy(roomCoins = v)
+                if (d > ui.roomDiamonds) ui = ui.copy(roomDiamonds = d)
+                ui
+            }
         }
     }
 
@@ -252,6 +352,16 @@ object LiveSession {
 
     // The seat we hold, so a rejoin never needs another round-trip to the API.
     private var seat: RoomJoinData? = null
+    /**
+     * A co-host door minted under a newer camera rule, held until the camera
+     * is actually turned on. Swapping connections the moment the host flips
+     * the rule closed the whole room — on every co-host's screen the host's
+     * video went dark behind a "connecting" flash, for a camera they may
+     * never open. The swap happens at the co-host's own camera tap instead.
+     */
+    private var pendingDoor: RoomJoinData? = null
+    /** Whether the token behind the current guest connection may publish the camera. */
+    private var doorCam = false
     private var publish = false
     private var video = false
     private var heartbeatSeconds = 20
@@ -265,6 +375,17 @@ object LiveSession {
         attached = true
         app = context.applicationContext
         scope.launch { LiveFeed.call.collect { runFeature(Unit) { onEvent(it) } } }
+        // A room this device was hosting when the process died (swiped away,
+        // battery pulled, OS kill): tell the server why. Its clock already
+        // stopped at the last heartbeat + allowance; this only names the end
+        // so the host's record reads "app closed", not "lost".
+        scope.launch {
+            // Wait for a signed-in session: the request must speak for the
+            // host. Signed out for good, the id simply waits for a later launch.
+            Xani.session.state.first { it is AuthState.SignedIn }
+            val stale = LiveHostService.takeHostingRoom(app)
+            if (stale != 0L) runFeature(Unit) { Xani.calls.liveEnd(stale, "app_closed") }
+        }
     }
 
     /**
@@ -279,22 +400,37 @@ object LiveSession {
         coverUrl: String = "",
         audience: String = "public",
         password: String = "",
-        /** Audio: seats including the host (2..35). */
+        /** Audio: seats including the host (2..45). */
         seats: Int = 0,
         /** Video: viewers may ask to co-host. */
         requests: Boolean = true,
     ) {
+        // A finished end card left on screen must not block the next go-live.
+        if (_state.value?.over == true) dismiss()
         if (_state.value != null && _state.value?.over != true) return
         val mine = ++session
         val kind = if (video) "video" else "audio"
         _state.value = LiveUi(0L, LiveRole.Host, LivePhase.Connecting, LiveRoomData(0, 0, kind, title, 0, true), "sfu")
         hold = scope.launch { LiveFeed.hold() }
         warmEngine()
+        // One key per go-live. If the reply is lost on the way back, the retry
+        // carries the same key and the server returns the room it already
+        // opened — the seconds verified in between are kept, not restarted.
+        val clientId = UUID.randomUUID().toString()
         scope.launch {
-            val r = Xani.calls.liveStart(
+            var r = Xani.calls.liveStart(
                 kind, title, tint, coverUrl = coverUrl, audience = audience, password = password,
-                seats = if (video) 0 else seats, requests = requests,
+                seats = if (video) 0 else seats, requests = requests, clientId = clientId,
             )
+            if (!r.ok && r.isTransport && mine == session) {
+                delay(1_500)
+                if (mine == session) {
+                    r = Xani.calls.liveStart(
+                        kind, title, tint, coverUrl = coverUrl, audience = audience, password = password,
+                        seats = if (video) 0 else seats, requests = requests, clientId = clientId,
+                    )
+                }
+            }
             val data = r.value
             if (mine != session) {
                 // The host left before the server answered: the room it just
@@ -307,7 +443,15 @@ object LiveSession {
             }
             heartbeatSeconds = data.heartbeatSeconds.coerceIn(5, 60)
             graceSeconds = data.reconnectGraceSeconds.coerceIn(30, 600)
-            update { it.copy(roomId = data.room.id, room = data.room, hlsUrl = data.hlsUrl, stage = data.stage, pk = data.room.pk).synced(data.room) }
+            update {
+                it.copy(roomId = data.room.id, room = data.room, hlsUrl = data.hlsUrl, stage = data.stage, pk = data.room.pk)
+                    .synced(data.room)
+                    .timed(data.time)
+            }
+            // Hosting outlives the screen: the typed foreground service keeps
+            // capture alive in the background and names the end if the task
+            // is swiped away.
+            LiveHostService.ensureRunning(app, data.room.id)
             join(data.sfu, publish = true, video = video)
             startHeartbeat(mine, "sfu")
             openRoomStream(mine, data.room.id)
@@ -317,6 +461,12 @@ object LiveSession {
     /** Watch. The server picks SFU or HLS; the UI renders whichever it got. */
     fun watch(roomId: Long, password: String = "") {
         if (_state.value?.roomId == roomId && _state.value?.over != true) return
+        // A host who minimized their broadcast can browse the app now: a tap
+        // on someone else's tile must not fall through leave() → endLive()
+        // and quietly take their own room down. Hosting is exclusive; ending
+        // it is only ever the exit sheet's explicit act.
+        val cur = _state.value
+        if (cur != null && cur.role == LiveRole.Host && !cur.over) return
         leave()
         val mine = ++session
         _state.value = LiveUi(roomId, LiveRole.Viewer, LivePhase.Connecting, LiveRoomData(roomId, 0, "video", "", 0, true), "hls")
@@ -339,6 +489,15 @@ object LiveSession {
                     mods = if (data.mod) it.mods + ProfileStore.currentUserId else it.mods,
                 ).synced(data.room)
             }
+            // My own arrival, worded on this device: the server's enter line
+            // fans out on the room stream, which I may subscribe to a beat too
+            // late to catch my own walk-in — so the line everyone else sees is
+            // put on my screen here. The streamed copy (which carries my
+            // levels) replaces it when it lands.
+            update { it.copy(chat = (it.chat + selfEnterLine(roomId)).takeLast(LiveUi.ChatCap)) }
+            // Walked into a fight already in progress: the other half comes
+            // from the opponent's room, the same seat the hosts use.
+            if (data.room.pk != null) openPkWatch(roomId)
             val sfu = data.sfu
             if (data.mode == "sfu" && sfu != null) {
                 join(sfu, publish = false, video = true)
@@ -362,13 +521,24 @@ object LiveSession {
      * [combo] is the position in a lucky streak; the server records it and
      * everyone's banner counts up with it.
      */
-    fun sendGift(gift: GiftData, receiverId: Long, combo: Int = 1, count: Int = 1): String? {
+    fun sendGift(gift: GiftData, receiverId: Long, combo: Int = 1, count: Int = 1): String? =
+        sendGift(gift, listOf(receiverId), combo, count)
+
+    /**
+     * Multi-select send: one request, one clientId, one optimistic preview —
+     * however many people were picked. Every receiver gets their own copy on
+     * the server (their own ledger row and split); the sender pays
+     * price × count × receivers. The server's single frame settles the one
+     * preview, so the room never plays the animation per receiver.
+     */
+    fun sendGift(gift: GiftData, receiverIds: List<Long>, combo: Int = 1, count: Int = 1): String? {
         val ui = _state.value ?: return null
         if (ui.over || ui.roomId == 0L) return null
-        val to = if (receiverId > 0L) receiverId else ui.room.hostId
+        val tos = receiverIds.map { if (it > 0L) it else ui.room.hostId }.distinct().ifEmpty { listOf(ui.room.hostId) }
+        val to = tos.first()
         val clientId = "g" + ProfileStore.currentUserId + "-" + System.currentTimeMillis() + "-" + (++giftSeq)
         val me = ProfileStore.state.value
-        val price = gift.coinPrice * count
+        val price = gift.coinPrice * count * tos.size
         // Local truth first: the coins pill drops now; the server's number
         // replaces it on reply (or the wallet frame, whichever is first).
         val optimistic = LiveGiftEvent(
@@ -388,21 +558,29 @@ object LiveSession {
                 },
             ),
             receiver = LivePersonData(id = to, username = "", fullName = "", avatarUrl = "", role = if (to == ui.room.hostId) "host" else "viewer"),
+            receivers = if (tos.size > 1) {
+                tos.map { LivePersonData(id = it, username = "", fullName = "", avatarUrl = "", role = if (it == ui.room.hostId) "host" else "viewer") }
+            } else {
+                emptyList()
+            },
             count = count,
             combo = combo,
             totalCoins = price,
             roomCoins = ui.roomCoins + price,
+            // No optimistic diamonds: the split is server policy; the pill
+            // moves on the acked frame, a beat later.
+            roomDiamonds = ui.roomDiamonds,
             atMs = System.currentTimeMillis(),
         )
         _gifts.tryEmit(optimistic)
         val mine = session
         val roomId = ui.roomId
         scope.launch {
-            var r = Xani.gifts.send(roomId, gift.id, to, clientId, count = count, combo = combo)
+            var r = Xani.gifts.send(roomId, gift.id, to, clientId, count = count, combo = combo, receiverIds = tos)
             if (!r.ok && r.isTransport) {
                 // Same clientId: the server lands it once whichever attempt got through.
                 delay(400)
-                r = Xani.gifts.send(roomId, gift.id, to, clientId, count = count, combo = combo)
+                r = Xani.gifts.send(roomId, gift.id, to, clientId, count = count, combo = combo, receiverIds = tos)
             }
             if (mine != session) return@launch
             val data = r.value
@@ -426,6 +604,7 @@ object LiveSession {
         seenGifts.clear()
         coinsFlush?.cancel(); coinsFlush = null
         coinsSeen.set(_state.value?.roomCoins ?: 0L)
+        diamondsSeen.set(_state.value?.roomDiamonds ?: 0L)
         roomStream = scope.launch {
             Xani.gifts.stream(roomId) { name, frame ->
                 if (mine != session) return@stream
@@ -439,8 +618,17 @@ object LiveSession {
                         if (ev.roomId == (_state.value?.roomId ?: 0L) && ev.entranceUrl.isNotEmpty()) {
                             _entrances.tryEmit(ev)
                         }
+                        // Every walk-in is also a chat line, effect or not —
+                        // the whole room (host included) sees who arrived.
+                        noteEnter(ev.user, ev.roomId, ev.atMs)
                     }
-                    "live_room" -> noteRoomCoins(data.long("gift_coins", -1L))
+                    "live_room" -> noteRoomCoins(data.long("gift_coins", -1L), data.long("gift_diamonds", -1L))
+                    // A game win somewhere on the platform. My own is dropped:
+                    // the game screen already celebrated it.
+                    "live_game_win" -> if (data.id("room_id") == roomId) {
+                        val ev = LiveGameWinEvent.from(data)
+                        if (ev.user.id != ProfileStore.currentUserId && ev.amount > 0) _gameWins.tryEmit(ev)
+                    }
                     // Hearts from someone else: float them and move the total.
                     // Mine are already on screen (and counted on the reply).
                     "live_like" -> if (data.id("room_id") == roomId) {
@@ -472,13 +660,25 @@ object LiveSession {
                         val phase = data.str("phase")
                         if (phase == "ended") {
                             closePkRoom()
-                            update { it.copy(pk = null) }
+                            // This room is still on air either way: the fight
+                            // going away never ends a broadcast. When it went
+                            // because the opponent closed their own live, the
+                            // arena is held briefly to say they left instead of
+                            // the split picture vanishing unexplained.
+                            if (data.str("reason") == "host_left") holdPkLeft() else {
+                                pkLeftHold?.cancel(); pkLeftHold = null
+                                update { it.copy(pk = null) }
+                            }
                         } else {
                             val pk = runFeature(null) { PkData.from(data) }
                             // Only a battle this room is a side of; a frame for
                             // another room (stale stream) cannot repaint ours.
                             if (pk != null && pk.id != 0L && (pk.left.roomId == roomId || pk.right.roomId == roomId)) {
+                                pkLeftHold?.cancel(); pkLeftHold = null
                                 update { it.copy(pk = pk) }
+                                // Everyone in the room watches the other half
+                                // from the opponent's room, viewers included.
+                                openPkWatch(roomId)
                             }
                         }
                     }
@@ -513,7 +713,7 @@ object LiveSession {
             }
         }
         _gifts.tryEmit(ev)
-        noteRoomCoins(ev.roomCoins)
+        noteRoomCoins(ev.roomCoins, ev.roomDiamonds)
     }
 
     private const val SEEN_CAP = 2048
@@ -555,6 +755,8 @@ object LiveSession {
                         totalJoins = 0,
                         uniqueViewers = 0,
                         reason = reason,
+                        verifiedMs = it.verifiedMs(),
+                        pausedMs = it.pausedMs,
                     ),
                 )
             }
@@ -597,8 +799,16 @@ object LiveSession {
         if (ui.roomId != 0L) {
             val mine = session
             scope.launch {
-                Xani.calls.stageMute(ui.roomId, muted)
+                val r = Xani.calls.stageMute(ui.roomId, muted)
                 if (mine != session) return@launch
+                // The server can refuse an unmute (a moderator disabled this
+                // account's mic). Re-mute the real track and say why — the
+                // optimistic icon alone must never leak audio.
+                if (!r.ok && !muted) {
+                    update { it.copy(muted = true) }
+                    room?.setMuted(true)
+                    _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
+                }
             }
         }
     }
@@ -675,11 +885,31 @@ object LiveSession {
         }
     }
 
+    /**
+     * Host (video): let co-hosts turn their camera on, or keep them to the mic.
+     * The server re-issues every co-host's seat under the new rule.
+     */
+    fun setGuestCam(on: Boolean) {
+        val ui = _state.value ?: return
+        if (ui.role != LiveRole.Host || ui.roomId == 0L || ui.over || ui.room.kind != "video") return
+        update { it.copy(stage = it.stage.copy(guestCam = on)) }
+        val mine = session
+        scope.launch {
+            val r = Xani.calls.stageSettings(ui.roomId, guestCam = on)
+            if (mine != session) return@launch
+            val st = r.value
+            if (r.ok && st != null) onStage(st) else if (!r.ok) {
+                update { it.copy(stage = it.stage.copy(guestCam = !on)) }
+                _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
+            }
+        }
+    }
+
     /** Host (audio): grow (or shrink to the last occupied) the seat count. Nobody moves. */
     fun setSeats(n: Int) {
         val ui = _state.value ?: return
         if (ui.role != LiveRole.Host || ui.roomId == 0L || ui.over) return
-        val want = n.coerceIn(2, 35)
+        val want = n.coerceIn(2, StageData.AudioSeatMax)
         if (want == ui.stage.seats) return
         val mine = session
         scope.launch {
@@ -729,13 +959,46 @@ object LiveSession {
         room?.let { runFeature(Unit) { it.close() } }
         room = null
         satAtMs = SystemClock.elapsedRealtime()
+        // The seat token's sources follow the rule at mint time (guestGrant).
+        pendingDoor = null
+        doorCam = ui.stage.guestCam
         update {
             it.copy(
                 role = LiveRole.Guest, transport = "sfu", phase = LivePhase.Connecting,
                 seat = seat, requested = false, stageBusy = false, muted = false,
+                // The camera is opt-in: even when the host allows co-host
+                // cameras, mine stays off until I tap the camera button.
+                cameraOff = true,
+                // My co-host clock starts at the server's zero on the first ack.
+                time = null, timeAtMs = 0L,
             )
         }
-        join(sfu, publish = true, video = ui.room.kind == "video")
+        // On stage I am being counted: keep capture alive off-screen too.
+        LiveHostService.ensureRunning(app, 0L)
+        // Mic only. The host's rule opens the camera *option* (and the seat
+        // token's sources); turning it on is my choice via toggleCamera().
+        join(sfu, publish = true, video = false)
+    }
+
+    /** Still on stage, new door: the host changed the co-host camera rule. */
+    private fun regrant(sfu: RoomJoinData, guestCam: Boolean) {
+        val ui = _state.value ?: return
+        if (ui.over || ui.role != LiveRole.Guest) return
+        // The rule is a door, not a switch. Whichever way it moved my camera
+        // goes off: losing it is forced, and gaining it only puts the button
+        // on screen — turning it on is mine to do, never the host's. The
+        // server clears every co-host's camera on the same change, so the
+        // tiles other people see agree with this.
+        //
+        // The connection, though, stays. Rejoining here closed the whole room
+        // on every rule flip: each co-host lost the host's video behind a
+        // one-second "connecting" flash for a camera they may never open.
+        // Losing the camera needs no new token — the track just stops — and
+        // gaining one only matters at the co-host's own tap, so the fresh
+        // door waits in [pendingDoor] until then (minted for hours, it keeps).
+        update { it.copy(cameraOff = true, stage = it.stage.copy(guestCam = guestCam)) }
+        room?.setVideoEnabled(false)
+        pendingDoor = if (guestCam && !doorCam) sfu else null
     }
 
     /**
@@ -751,11 +1014,14 @@ object LiveSession {
         }
         room?.let { runFeature(Unit) { it.close() } }
         room = null
+        pendingDoor = null
+        doorCam = false
         update {
             it.copy(
                 role = LiveRole.Viewer, phase = LivePhase.Connecting, seat = 0, muted = false, cameraOff = false,
                 stageBusy = false, requested = false,
                 stage = it.stage.copy(members = it.stage.members.filterNot { m -> m.user.id == ProfileStore.currentUserId }),
+                time = null, timeAtMs = 0L,
             )
         }
         if (reason == "host_dropped") _notices.tryEmit(LiveNotice("host_dropped"))
@@ -809,7 +1075,7 @@ object LiveSession {
             val data = r.value
             if (r.ok && data != null) {
                 update { it.copy(pk = data.pk, pkInvite = null) }
-                openPkPublish(data.sfu)
+                openPkWatch(_state.value?.roomId ?: 0L)
             } else if (!r.ok) {
                 update { it.copy(pkInvite = null) }
                 _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
@@ -823,10 +1089,23 @@ object LiveSession {
         scope.launch { Xani.calls.pkDecline(inv.id) }
     }
 
+    /**
+     * Stop the fight. Either side may: each host sends their own room id and
+     * the server checks they are one of the two, so this works the same for
+     * the inviter and the one who accepted. The result still shows for its
+     * window afterwards, so this is not an end to the broadcast.
+     */
     fun endPk() {
         val ui = _state.value ?: return
         if (ui.role != LiveRole.Host || ui.roomId == 0L) return
-        scope.launch { Xani.calls.pkEnd(ui.roomId) }
+        val mine = session
+        scope.launch {
+            val r = Xani.calls.pkEnd(ui.roomId)
+            // A refusal used to be silent, which read as a dead button.
+            if (mine == session && !r.ok) {
+                _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
+            }
+        }
     }
 
     fun rematchPk(durationSec: Int = 0) {
@@ -838,31 +1117,146 @@ object LiveSession {
         }
     }
 
-    private fun openPkPublish(sfu: RoomJoinData) {
-        if (sfu.token.isBlank() || sfu.url.isBlank()) return
-        val eng = engine ?: return
+    /**
+     * Watch the opponent's room for the other half of the arena: a
+     * subscribe-only seat the server mints, joined with no mic and no camera.
+     *
+     * Deliberately not the mirror image — publishing our own camera into their
+     * room. That needs a second capture of the one camera on this phone, and
+     * Android hands the sensor to the newest opener and takes it from the
+     * older one: the host's own broadcast goes black and dies at its next
+     * heartbeat, so one host ending the fight took the other's live with it.
+     * One extra subscription costs nothing here; the SFU already has the
+     * track. Idempotent, and a failure is not fatal — the half falls back to
+     * the opponent's HLS, then their avatar.
+     */
+    private fun openPkWatch(roomId: Long) {
+        // Score frames arrive several times a second during a fight and every
+        // one of them asks for the seat: the room we already have, and the one
+        // request still in flight, are both an answer.
+        if (roomId == 0L || pkRoom != null || pkWatchPending) return
         val mine = session
-        closePkRoom()
-        pkRoom = runFeature(null) {
-            eng.joinRoom(sfu.url, sfu.token, video = true, publish = true, object : RtcRoom.Listener {
-                override fun onLink(link: RtcLink) = Unit
-                override fun onParticipants(userIds: List<Long>) = Unit
-                override fun onRemoteVideo(userId: Long, present: Boolean) = Unit
-            })
+        val gen = pkWatchGen
+        pkWatchPending = true
+        scope.launch {
+            val r = try { Xani.calls.pkWatchSeat(roomId) } finally { pkWatchPending = false }
+            val sfu = r.value
+            if (mine != session || gen != pkWatchGen) return@launch
+            if (sfu == null || sfu.token.isBlank() || sfu.url.isBlank()) return@launch
+            if (pkRoom != null) return@launch
+            // Resolved here, not at the call: a viewer can be told about the
+            // fight before the primary seat has built the engine.
+            val eng = engine ?: RtcEngineFactory.create(app)?.also { engine = it } ?: return@launch
+            pkRoom = runFeature(null) {
+                eng.joinRoom(
+                    sfu.url,
+                    sfu.token,
+                    video = true,
+                    publish = false,
+                    listener = object : RtcRoom.Listener {
+                        override fun onLink(link: RtcLink) = Unit
+                        override fun onParticipants(userIds: List<Long>) = Unit
+                        // The opponent's track landed (or went): re-key the
+                        // arena's remote half. This room has no bearing on our
+                        // own link, so nothing here reconnects or ends the live.
+                        override fun onRemoteVideo(userId: Long, present: Boolean): Unit = post(mine) {
+                            if (present) pkVideo += userId else pkVideo -= userId
+                            update { it.copy(mediaRev = it.mediaRev + 1) }
+                        }
+                    },
+                    secondary = true,
+                )
+            }
+            if (mine != session) closePkRoom()
         }
-        if (mine != session) closePkRoom()
+    }
+
+    /**
+     * The opponent's picture during a PK; null until their track lands, so the
+     * half can fall back to their HLS instead of painting an empty renderer.
+     * Their own room first; the primary room covers a peer that still
+     * cross-publishes into ours (iOS, web).
+     */
+    fun pkRemoteView(context: Context, userId: Long): View? = runFeature(null) {
+        when {
+            userId == 0L -> null
+            userId in pkVideo -> pkRoom?.remoteView(context, userId)
+            userId in mainVideo -> room?.remoteView(context, userId)
+            else -> null
+        }
+    }
+
+    /**
+     * The opponent closed their live. Keep the arena on screen on a local
+     * phase for [PkLeftHoldMs] so their half reads "left", then fold it away
+     * and give this broadcast the full frame back. This room is untouched —
+     * it keeps streaming until its own host ends it.
+     */
+    private fun holdPkLeft() {
+        val pk = _state.value?.pk ?: return
+        if (pk.opponentLeft) return
+        update { it.copy(pk = pk.copy(phase = PkData.PhaseLeft)) }
+        val mine = session
+        pkLeftHold?.cancel()
+        pkLeftHold = scope.launch {
+            delay(PkLeftHoldMs)
+            if (mine != session) return@launch
+            update { if (it.pk?.opponentLeft == true) it.copy(pk = null) else it }
+        }
     }
 
     private fun closePkRoom() {
+        pkWatchGen++
         pkRoom?.let { runFeature(Unit) { it.close() } }
         pkRoom = null
+        pkVideo.clear()
     }
+
+    /** How long the arena stays up saying the opponent left. */
+    private const val PkLeftHoldMs = 8_000L
 
     fun toggleCamera() {
         val ui = _state.value ?: return
         if (ui.role == LiveRole.Viewer) return
-        update { it.copy(cameraOff = !ui.cameraOff) }
-        room?.setVideoEnabled(ui.cameraOff)
+        if (ui.role == LiveRole.Guest && !ui.stage.guestCam) return
+        val on = ui.cameraOff
+        update { it.copy(cameraOff = !on) }
+        // The host opened the camera rule after I sat down: the token behind
+        // this connection cannot publish video, and the camera-capable door
+        // from that regrant has been waiting for exactly this tap. Swap
+        // connections now — the one moment a reconnect is the user's own ask.
+        val held = pendingDoor
+        if (on && ui.role == LiveRole.Guest && held != null) {
+            pendingDoor = null
+            doorCam = true
+            room?.let { runFeature(Unit) { it.close() } }
+            room = null
+            join(held, publish = true, video = true)
+        } else {
+            room?.setVideoEnabled(on)
+        }
+        if (ui.role != LiveRole.Guest || ui.roomId == 0L) return
+        // Tell the room whose camera is on. Without this every device has to
+        // guess from the host's rule, and the guess is "all of them" — six
+        // co-hosts appear to go live the moment the host opens the door.
+        val mine = session
+        scope.launch {
+            val r = Xani.calls.stageCam(ui.roomId, on)
+            if (mine != session) return@launch
+            // A server that predates this endpoint answers 404 not_found
+            // ("endpoint doesn't exist"). The camera itself is fine — only
+            // the roster's cam dot is a guess there — so the tap must not be
+            // rolled back or shouted about over a reconciliation call.
+            if (r.statusCode == 404 && r.code == "not_found") return@launch
+            // Refused (the host closed the door between the tap and the
+            // call): put the real track back off, or the SFU drops it and the
+            // tile shows a camera nobody is publishing.
+            if (!r.ok && on) {
+                update { it.copy(cameraOff = true) }
+                room?.setVideoEnabled(false)
+                _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
+            }
+        }
     }
 
     fun switchCamera() = room?.switchCamera() ?: Unit
@@ -878,7 +1272,8 @@ object LiveSession {
         if (ui.role == LiveRole.Viewer || ui.over) return
         val r = room ?: return
         r.setMuted(ui.muted)
-        if (ui.room.kind == "video") r.setVideoEnabled(!ui.cameraOff)
+        val camAllowed = ui.role == LiveRole.Host || ui.stage.guestCam
+        if (ui.room.kind == "video" && camAllowed) r.setVideoEnabled(!ui.cameraOff)
     }
 
     /** Host invites a viewer up as a guest (they get `live_guest` with an SFU seat). */
@@ -954,6 +1349,64 @@ object LiveSession {
         }
     }
 
+    /**
+     * Someone walked in: one "entered" line in chat for the whole room. Fed by
+     * the server's enter chat line AND the live_enter frame (an older server
+     * may only send the latter), so the newest copy replaces any earlier line
+     * for the same person instead of stacking duplicates.
+     */
+    private fun noteEnter(user: LivePersonData, roomId: Long, atMs: Long) {
+        if (user.id == 0L || roomId == 0L) return
+        val ui = _state.value ?: return
+        if (ui.roomId != roomId) return
+        val at = if (atMs > 0) atMs else System.currentTimeMillis()
+        val line = LiveChatData(
+            // Negative = provisional (the server's copy replaces it); the user
+            // bits keep two same-millisecond arrivals from sharing a list key.
+            id = -((at shl 10) or (user.id and 1023L)).coerceAtLeast(1L),
+            roomId = roomId,
+            clientId = "",
+            user = user,
+            text = "",
+            atMs = at,
+            event = "enter",
+        )
+        update {
+            val rest = it.chat.filterNot { m -> m.event == "enter" && m.user.id == user.id }
+            it.copy(chat = (rest + line).takeLast(LiveUi.ChatCap))
+        }
+    }
+
+    /**
+     * "I entered the room", built locally at join. Negative id: it can never
+     * collide with a server line, and marks it as the provisional copy the
+     * streamed one (with my gifting level on it) is allowed to replace.
+     */
+    private fun selfEnterLine(roomId: Long): LiveChatData {
+        val me = ProfileStore.state.value
+        val myFrame = FrameStore.frames.value[ProfileStore.currentUserId]
+        val myBadge = FrameStore.badges.value[ProfileStore.currentUserId]
+        return LiveChatData(
+            id = -System.currentTimeMillis(),
+            roomId = roomId,
+            clientId = "",
+            user = LivePersonData(
+                id = ProfileStore.currentUserId,
+                username = me.username,
+                fullName = me.displayName,
+                avatarUrl = me.avatarUrl,
+                role = "viewer",
+                frameUrl = myFrame?.url.orEmpty(),
+                frameMime = myFrame?.mime.orEmpty(),
+                badgeUrl = myBadge?.url.orEmpty(),
+                badgeMime = myBadge?.mime.orEmpty(),
+            ),
+            text = "",
+            atMs = System.currentTimeMillis(),
+            event = "enter",
+        )
+    }
+
     fun localView(context: Context): View? = runFeature(null) { room?.localView(context) }
 
     /** Host's stream for SFU viewers/guests; null on the HLS path. */
@@ -975,7 +1428,15 @@ object LiveSession {
                 update { it.copy(hostAway = e.away, room = it.room.copy(hostAway = e.away)) }
             }
             is CallEvent.LiveChat -> if (e.message.roomId == ui.roomId) {
-                update { it.copy(chat = it.chat.settle(e.message)) }
+                update {
+                    // The server's enter line supersedes any provisional copy
+                    // (my own worded at join, or one synthesized off the
+                    // live_enter frame), so nobody's arrival prints twice.
+                    val base = if (e.message.event == "enter") {
+                        it.chat.filterNot { m -> m.event == "enter" && m.user.id == e.message.user.id }
+                    } else it.chat
+                    it.copy(chat = base.settle(e.message))
+                }
             }
             is CallEvent.LiveEnded -> if (e.roomId == ui.roomId && ui.phase != LivePhase.Ended) {
                 stopMedia()
@@ -988,9 +1449,13 @@ object LiveSession {
                     )
                 }
             }
-            is CallEvent.LiveGuest -> if (e.roomId == ui.roomId && ui.role == LiveRole.Viewer) {
-                // Promoted (accepted or invited): swap the viewer seat for a publishing one.
-                goUp(e.sfu, e.seat)
+            is CallEvent.LiveGuest -> if (e.roomId == ui.roomId) {
+                when {
+                    // Promoted (accepted or invited): swap the viewer seat for a publishing one.
+                    ui.role == LiveRole.Viewer && !e.regrant -> goUp(e.sfu, e.seat)
+                    ui.role == LiveRole.Guest && e.regrant -> regrant(e.sfu, e.guestCam)
+                    else -> Unit
+                }
             }
             is CallEvent.LiveStageRequest -> if (e.roomId == ui.roomId && ui.role == LiveRole.Host) update {
                 val rest = it.requests.filterNot { q -> q.user.id == e.user.id }
@@ -1019,10 +1484,7 @@ object LiveSession {
             }
             is CallEvent.LivePkStart -> if (ui.role == LiveRole.Host) {
                 update { it.copy(pk = e.start.pk, pkInvite = null) }
-                // Cross-publish into the opponent's SFU so their audience sees us
-                // without anyone leaving their room. Camera may already be on the
-                // primary seat; a failed second publish falls back to HLS on their side.
-                openPkPublish(e.start.sfu)
+                openPkWatch(ui.roomId)
             }
             // A moderator showed me the door: the room ends for this device
             // with its own reason, so the surface says so instead of "host ended".
@@ -1041,9 +1503,19 @@ object LiveSession {
             }
             // Entrances arrive on the per-user stream (the room fanout targets
             // each person's own channel), so this is where everyone — including
-            // the person walking in — actually hears about them.
-            is CallEvent.LiveEnter -> if (e.enter.roomId == ui.roomId && e.enter.entranceUrl.isNotEmpty()) {
-                _entrances.tryEmit(e.enter)
+            // the person walking in — actually hears about them. A frame for
+            // this room OR one landing while the room id is still unknown (the
+            // join/start reply in flight — the host's own entrance on go-live
+            // races the start reply) is buffered; the overlay filters by room.
+            is CallEvent.LiveEnter -> {
+                if (e.enter.entranceUrl.isNotEmpty() &&
+                    (ui.roomId == 0L || e.enter.roomId == ui.roomId)
+                ) {
+                    _entrances.tryEmit(e.enter)
+                }
+                // The same frame also words the arrival in chat; noteEnter
+                // replaces any copy the room stream already delivered.
+                noteEnter(e.enter.user, e.enter.roomId, e.enter.atMs)
             }
             else -> Unit
         }
@@ -1053,6 +1525,8 @@ object LiveSession {
 
     private var likePending = 0
     private var likeFlush: Job? = null
+    private var likeLineRoom = 0L
+    private var likeLineAtMs = 0L
 
     /**
      * One heart tapped. Taps are batched: the first starts a short timer,
@@ -1065,6 +1539,7 @@ object LiveSession {
         if (ui.over || ui.roomId == 0L) return
         likePending++
         update { it.copy(likes = it.likes + 1) }
+        ownLikeLine(ui)
         if (likeFlush?.isActive == true) return
         val mine = session
         val roomId = ui.roomId
@@ -1077,6 +1552,51 @@ object LiveSession {
             if (mine != session) return@launch
             r.value?.let { total -> update { if (total > it.likes) it.copy(likes = total) else it } }
         }
+    }
+
+    /**
+     * My own "liked the LIVE" line in the comment lane, drawn the moment the
+     * finger lands: the server fans the same system line to everyone else and
+     * skips me, so one tap puts one line on every screen without a round-trip.
+     * Same one-line-a-minute gap per person as the server keeps, so a tap
+     * storm stays a single line.
+     */
+    private fun ownLikeLine(ui: LiveUi) {
+        val now = System.currentTimeMillis()
+        if (ui.roomId != likeLineRoom) {
+            likeLineRoom = ui.roomId
+            likeLineAtMs = 0L
+        }
+        if (now - likeLineAtMs < 60_000L) return
+        likeLineAtMs = now
+        val me = ProfileStore.state.value
+        val myFrame = FrameStore.frames.value[ProfileStore.currentUserId]
+        val myBadge = FrameStore.badges.value[ProfileStore.currentUserId]
+        val line = LiveChatData(
+            // Local-only line: negative, so it never collides with a server id.
+            id = -now,
+            roomId = ui.roomId,
+            clientId = "",
+            user = LivePersonData(
+                id = ProfileStore.currentUserId,
+                username = me.username,
+                fullName = me.displayName,
+                avatarUrl = me.avatarUrl,
+                role = when (ui.role) {
+                    LiveRole.Host -> "host"
+                    LiveRole.Guest -> "guest"
+                    LiveRole.Viewer -> "viewer"
+                },
+                frameUrl = myFrame?.url.orEmpty(),
+                frameMime = myFrame?.mime.orEmpty(),
+                badgeUrl = myBadge?.url.orEmpty(),
+                badgeMime = myBadge?.mime.orEmpty(),
+            ),
+            text = "",
+            atMs = now,
+            event = "like",
+        )
+        update { it.copy(chat = (it.chat + line).takeLast(LiveUi.ChatCap)) }
     }
 
     /** Put [emoji] on chat line [line] for everyone (tap the same one again to take it off). */
@@ -1143,6 +1663,17 @@ object LiveSession {
     }
 
     /**
+     * Host / moderator: who was blocked or removed in this live, or null when
+     * refused (or the server predates the endpoint — the sheet shows nothing
+     * rather than an error).
+     */
+    suspend fun sessionBans(): List<LiveBannedData>? {
+        val ui = _state.value ?: return null
+        if (ui.roomId == 0L) return null
+        return Xani.calls.sessionBans(ui.roomId).value
+    }
+
+    /**
      * Build the media engine (factory + GPU context, ~150 ms) off Main while
      * the start/join request is in flight, so join() finds it ready and the
      * frame that shows the room never waits on it.
@@ -1161,6 +1692,8 @@ object LiveSession {
         seat = sfu
         this.publish = publish
         this.video = video
+        // A fresh room knows nothing about who was publishing in the last one.
+        mainVideo.clear()
         val mine = session
         room = runFeature(null) {
             eng.joinRoom(sfu.url, sfu.token, video, publish, object : RtcRoom.Listener {
@@ -1173,11 +1706,22 @@ object LiveSession {
                     // host-only filter raced the join: the track event could
                     // land before the room told us who the host is, nothing
                     // bumped afterwards, and the viewer stared at black.
+                    if (present) mainVideo += userId else mainVideo -= userId
+                    update { it.copy(mediaRev = it.mediaRev + 1) }
+                }
+                // Our own camera went live. The bridge preview has already given
+                // the sensor up by now, so this is the moment the host's renderer
+                // exists — re-key or they keep watching the handover gap.
+                override fun onLocalVideo(): Unit = post(mine) {
                     update { it.copy(mediaRev = it.mediaRev + 1) }
                 }
             })
         }
         if (room == null) { fail("failed"); return }
+        // A viewer whose connection flapped while the app was in the background
+        // rejoins here with nobody watching: the fresh room must come up silent,
+        // the same way the foreground collector left the old one.
+        if (!publish && !AppForeground.visible.value) room?.setPlaybackMuted(true)
         update { it.copy(mediaRev = it.mediaRev + 1) }
     }
 
@@ -1242,13 +1786,26 @@ object LiveSession {
     private fun startHeartbeat(mine: Int, mode: String) {
         heartbeat?.cancel()
         heartbeat = scope.launch {
+            // A beat the server never saw is silence on the ledger. After a
+            // miss the next beat goes out in a few seconds, not a full
+            // interval, so one dropped packet on a weak link does not cost
+            // the host a split; a dead link backs off to the normal cadence.
+            var wait = heartbeatSeconds * 1000L
+            var misses = 0
             while (mine == session) {
-                delay(heartbeatSeconds * 1000L)
+                delay(wait)
                 val ui = _state.value ?: return@launch
                 if (mine != session || ui.over || ui.roomId == 0L) return@launch
                 val r = Xani.calls.liveHeartbeat(ui.roomId, if (ui.role == LiveRole.Viewer) mode else "sfu")
                 if (mine != session) return@launch
                 val data = r.value
+                if (r.ok || !r.isTransport) {
+                    misses = 0
+                    wait = heartbeatSeconds * 1000L
+                } else {
+                    misses++
+                    wait = if (misses <= QUICK_RETRIES) QUICK_RETRY_MS * misses else heartbeatSeconds * 1000L
+                }
                 when {
                     r.ok && data != null && !data.live -> {
                         stopMedia()
@@ -1266,13 +1823,15 @@ object LiveSession {
                                     totalJoins = 0,
                                     uniqueViewers = 0,
                                     reason = if (it.role == LiveRole.Host) "lost" else "host_ended",
+                                    verifiedMs = it.verifiedMs(),
+                                    pausedMs = it.pausedMs,
                                 ),
                                 hostAway = false,
                             )
                         }
                         return@launch
                     }
-                    r.ok && data != null -> update { it.synced(data.room) }
+                    r.ok && data != null -> update { it.synced(data.room).timed(data.time) }
                     r.statusCode == 404 || r.statusCode == 410 -> {
                         stopMedia()
                         update {
@@ -1302,6 +1861,7 @@ object LiveSession {
         room = if (room.id != 0L) room else this.room,
         viewers = room.viewers,
         roomCoins = maxOf(roomCoins, room.giftCoins),
+        roomDiamonds = maxOf(roomDiamonds, room.giftDiamonds),
         peakViewers = maxOf(peakViewers, room.viewers, room.peakViewers),
         syncDurationSeconds = room.durationSeconds,
         syncAtMs = SystemClock.elapsedRealtime(),
@@ -1310,6 +1870,13 @@ object LiveSession {
         pk = room.pk ?: pk,
     )
 
+    /** A verified-time ack landed (host / co-host); viewers get none and keep null. */
+    private fun LiveUi.timed(t: LiveTimeView?): LiveUi =
+        if (t == null) this else copy(time = t, timeAtMs = SystemClock.elapsedRealtime())
+
+    private const val QUICK_RETRIES = 3
+    private const val QUICK_RETRY_MS = 2_500L
+
     private fun fail(reason: String, message: String = "") {
         teardown()
         update { it.copy(phase = LivePhase.Ended, endReason = reason, error = message, hostAway = false) }
@@ -1317,16 +1884,23 @@ object LiveSession {
 
     /** Media and timers stop; the state stays so the surface can show why. */
     private fun stopMedia() {
+        pendingDoor = null
+        doorCam = false
         heartbeat?.cancel(); heartbeat = null
         rejoin?.cancel(); rejoin = null
         roomStream?.cancel(); roomStream = null
         coinsFlush?.cancel(); coinsFlush = null
         coinsSeen.set(0L)
+        diamondsSeen.set(0L)
         room?.let { runFeature(Unit) { it.close() } }
         room = null
+        mainVideo.clear()
         closePkRoom()
+        pkLeftHold?.cancel(); pkLeftHold = null
         seat = null
         lostAtMs = 0L
+        // Ending on purpose: the next launch must not report an "app closed".
+        if (attached) LiveHostService.clearHostingRoom(app)
     }
 
     private fun teardown() {

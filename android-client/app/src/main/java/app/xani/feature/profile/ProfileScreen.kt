@@ -24,16 +24,19 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +50,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +59,7 @@ import app.xani.core.device.DeviceClass
 import app.xani.core.media.RemoteImage
 import app.xani.core.net.AuthState
 import app.xani.core.net.PostData
+import app.xani.core.net.StoreShelfData
 import app.xani.core.net.Xani
 import app.xani.feature.social.FrameStore
 import app.xani.feature.social.LevelMark
@@ -164,6 +169,11 @@ fun ProfileScreen(
             Xani.session.clearSwitchError()
         }
     }
+    // The store boxes under Edit / Share: painted from the disk cache at once,
+    // revalidated on every profile open and after every purchase / activation.
+    val shelf by StoreShelfStore.state.collectAsState()
+    var storeScope by remember { mutableStateOf(StoreScope.All) }
+    LaunchedEffect(signedIn?.user?.id) { StoreShelfStore.ensure(signedIn?.user?.id ?: 0L) }
     /** A grid cell opened full-screen. */
     var viewing by remember { mutableStateOf<PostData?>(null) }
     /** Long-pressed cell: the author's own edit / delete actions. */
@@ -239,8 +249,98 @@ fun ProfileScreen(
     // Which list a tapped cell comes from, so the viewer opens with no re-read.
     val cells = tab?.raw ?: mine.raw
 
-    Box(Modifier.fillMaxSize().background(ProfileTokens.Bg)) {
+    // One grid scroller, kept across recompositions. Pagination reads its
+    // layout here rather than from inside the last cell, so the next page is
+    // asked for while rows are still below the fold — the scroll never stalls
+    // at the bottom waiting for a fetch, then jumps.
+    val gridState = rememberLazyGridState()
+    val nearEnd by remember {
+        derivedStateOf {
+            val info = gridState.layoutInfo
+            val total = info.totalItemsCount
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            total > 0 && last >= total - 7
+        }
+    }
+    LaunchedEffect(nearEnd, filter) {
+        if (!nearEnd) return@LaunchedEffect
+        when (filter) {
+            ProfileFilter.Liked -> ReactedPosts.Liked.loadMore()
+            ProfileFilter.Saved -> ReactedPosts.Saved.loadMore()
+            else -> MyPosts.loadMore()
+        }
+    }
+
+    // Shared by the drawer and the shortcut boxes under the store row: one
+    // switch owns where every account key goes.
+    val act: (String) -> Unit = { action ->
+        drawer = false
+        when (action) {
+            "logout" -> Xani.session.signOut()
+            "frames" -> {
+                storeScope = StoreScope.All
+                route = ProfileRoute.Frames
+            }
+            "gifting" -> route = ProfileRoute.GiftRecord
+            "txn" -> route = ProfileRoute.Transactions
+            "balance", "wallet", "coins" -> route = ProfileRoute.Balance
+            "recharge" -> route = ProfileRoute.Recharge
+            "seller_hub" -> route = ProfileRoute.SellerHub
+            "coin_sellers" -> route = ProfileRoute.CoinSellers
+            "diamonds" -> route = ProfileRoute.Withdraw
+            "help" -> {
+                helpTicketId = 0L
+                route = ProfileRoute.Help
+            }
+            "report" -> route = ProfileRoute.Report
+            "terms" -> route = ProfileRoute.Terms
+            "roles" -> {
+                roleRequestId = 0L
+                route = ProfileRoute.Roles
+            }
+            "moderation" -> route = ProfileRoute.Moderation
+            "find_friends" -> route = ProfileRoute.FindFriends
+            "live" -> route = ProfileRoute.MyLive
+            "rewards" -> route = ProfileRoute.MyRewards
+        }
+    }
+
+    // Nothing else is open on top of the grid: the only time a swipe in from
+    // the right edge means "open the menu".
+    val homeIdle = route == ProfileRoute.Home && !drawer && !statusSheet && !photoSheet && !accountSheet &&
+        !pictureOpen && viewing == null && acting == null && editing == null
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(ProfileTokens.Bg)
+            // Edge swipe opens the drawer, the same gesture that closes it.
+            // The grid takes vertical drags first; a horizontal pull that
+            // starts inside the right-edge band reaches here untouched.
+            .pointerInput(homeIdle) {
+                if (!homeIdle) return@pointerInput
+                val edge = 28.dp.toPx()
+                val trigger = 40.dp.toPx()
+                var armed = false
+                var pulled = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { start ->
+                        armed = start.x >= size.width - edge
+                        pulled = 0f
+                    },
+                    onHorizontalDrag = { change, delta ->
+                        if (!armed) return@detectHorizontalDragGestures
+                        change.consume()
+                        pulled += delta
+                        if (pulled <= -trigger) {
+                            armed = false
+                            drawer = true
+                        }
+                    },
+                )
+            },
+    ) {
         LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Fixed(3),
             modifier = Modifier
                 .fillMaxSize()
@@ -275,12 +375,19 @@ fun ProfileScreen(
                     onDrawer = { drawer = true },
                     onEdit = { route = ProfileRoute.Edit },
                     onShare = { route = ProfileRoute.Share },
+                    shelf = shelf,
+                    onStore = {
+                        storeScope = it
+                        route = ProfileRoute.Frames
+                    },
+                    onQuick = act,
                     onSwitchAccounts = { accountSheet = true },
                     onCopied = { toast = copy.t(Copy.ProfileCopied) },
                     onStats = {
                         statsKind = it
                         route = ProfileRoute.Stats
                     },
+                    onBalance = { route = ProfileRoute.Balance },
                 )
             }
             val loaded = tab?.loaded ?: mine.loaded
@@ -308,17 +415,7 @@ fun ProfileScreen(
                     )
                 }
             }
-            items(posts, key = { it.id }) { post ->
-                // Ask for the next page while the last row is still off-screen.
-                if (post.id == posts.lastOrNull()?.id) {
-                    LaunchedEffect(post.id, filter) {
-                        when (filter) {
-                            ProfileFilter.Liked -> ReactedPosts.Liked.loadMore()
-                            ProfileFilter.Saved -> ReactedPosts.Saved.loadMore()
-                            else -> MyPosts.loadMore()
-                        }
-                    }
-                }
+            items(posts, key = { it.id }, contentType = { "post" }) { post ->
                 PostCell(
                     post = post,
                     device = device,
@@ -340,26 +437,8 @@ fun ProfileScreen(
                 drawer = false
                 route = ProfileRoute.Settings
             },
-            onAction = { action ->
-                drawer = false
-                when (action) {
-                    "logout" -> Xani.session.signOut()
-                    "frames" -> route = ProfileRoute.Frames
-                    "gifting" -> route = ProfileRoute.GiftRecord
-                    "txn" -> route = ProfileRoute.Transactions
-                    "diamonds", "wallet" -> route = ProfileRoute.Withdraw
-                    "help" -> {
-                        helpTicketId = 0L
-                        route = ProfileRoute.Help
-                    }
-                    "report" -> route = ProfileRoute.Report
-                    "terms" -> route = ProfileRoute.Terms
-                    "roles" -> {
-                        roleRequestId = 0L
-                        route = ProfileRoute.Roles
-                    }
-                }
-            },
+            onCopied = { toast = copy.t(Copy.ProfileCopied) },
+            onAction = act,
         )
 
         when (route) {
@@ -375,7 +454,12 @@ fun ProfileScreen(
                 passwordLoginActive = Xani.session.lastKnownUser?.passwordLoginActive == true,
                 onAction = { action ->
                     when (action) {
-                        "logout" -> Xani.session.signOut()
+                        // Signing out may land on another saved account, so leave
+                        // the settings of the account that is no longer active.
+                        "logout" -> {
+                            route = ProfileRoute.Home
+                            Xani.session.signOut()
+                        }
                         "password" -> route = ProfileRoute.Password
                         "txn" -> route = ProfileRoute.Transactions
                         "withdraw" -> route = ProfileRoute.Withdraw
@@ -386,6 +470,7 @@ fun ProfileScreen(
                             route = ProfileRoute.Help
                         }
                         "terms" -> route = ProfileRoute.Terms
+                        "find_friends" -> route = ProfileRoute.FindFriends
                         "switch" -> {
                             route = ProfileRoute.Home
                             accountSheet = true
@@ -417,6 +502,7 @@ fun ProfileScreen(
             )
             ProfileRoute.Frames -> FramesScreen(
                 copy = copy,
+                scope = storeScope,
                 onBack = { route = ProfileRoute.Home },
             )
             ProfileRoute.GiftRecord -> GiftRecordScreen(
@@ -428,6 +514,34 @@ fun ProfileScreen(
                 onBack = { route = ProfileRoute.Home },
             )
             ProfileRoute.Withdraw -> WithdrawScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+            )
+            ProfileRoute.Balance -> BalanceScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+                onRecharge = { route = ProfileRoute.Recharge },
+                onWithdraw = { route = ProfileRoute.Withdraw },
+                onHistory = { route = ProfileRoute.Transactions },
+            )
+            ProfileRoute.MyLive -> MyLiveScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+                onRewards = { route = ProfileRoute.MyRewards },
+            )
+            ProfileRoute.MyRewards -> MyRewardsScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+            )
+            ProfileRoute.Recharge -> RechargeScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Balance },
+            )
+            ProfileRoute.SellerHub -> SellerHubScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+            )
+            ProfileRoute.CoinSellers -> CoinSellersScreen(
                 copy = copy,
                 onBack = { route = ProfileRoute.Home },
             )
@@ -461,6 +575,14 @@ fun ProfileScreen(
                     route = ProfileRoute.Home
                 },
                 startRequestId = roleRequestId,
+            )
+            ProfileRoute.Moderation -> ModerationScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Home },
+            )
+            ProfileRoute.FindFriends -> FindFriendsScreen(
+                copy = copy,
+                onBack = { route = ProfileRoute.Settings },
             )
             ProfileRoute.Home -> Unit
         }
@@ -592,9 +714,13 @@ private fun ProfileHeader(
     onDrawer: () -> Unit,
     onEdit: () -> Unit,
     onShare: () -> Unit,
+    shelf: StoreShelfData,
+    onStore: (StoreScope) -> Unit,
+    onQuick: (String) -> Unit,
     onSwitchAccounts: () -> Unit,
     onCopied: () -> Unit,
     onStats: (ProfileStatsKind) -> Unit,
+    onBalance: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
         // Figma: foot · @handle · share + hamburger
@@ -718,6 +844,13 @@ private fun ProfileHeader(
             ) {
                 XaniText(handle, Type.Caption, color = ProfileTokens.Sub)
             }
+            // Account id under the handle: support asks for it, copy is one tap.
+            CopyableUserId(
+                copy = copy,
+                userId = ProfileStore.currentUserId,
+                onCopied = onCopied,
+                modifier = Modifier.padding(top = rdp(6)),
+            )
             if (roleTitles.isNotEmpty()) {
                 // Current role title(s); tap opens the roles workspace.
                 Box(
@@ -746,6 +879,7 @@ private fun ProfileHeader(
             ) {
                 Stat(snapshot.following, copy.t(Copy.ProfileFollowing), true) { onStats(ProfileStatsKind.Following) }
                 Stat(snapshot.followers, copy.t(Copy.ProfileFollowers), true) { onStats(ProfileStatsKind.Followers) }
+                Stat(snapshot.sending, copy.t(Copy.ProfileSending), true) { onStats(ProfileStatsKind.Sending) }
                 Stat(snapshot.receiving, copy.t(Copy.ProfileReceiving), false) { onStats(ProfileStatsKind.Receiving) }
             }
 
@@ -755,10 +889,10 @@ private fun ProfileHeader(
                     .padding(top = rdp(10)),
                 horizontalArrangement = Arrangement.spacedBy(rdp(10)),
             ) {
-                Wallet(snapshot.coins, copy.t(Copy.ProfileCoins)) {
+                Wallet(snapshot.coins, copy.t(Copy.ProfileCoins), onBalance) {
                     ProfileIco.Coin(ProfileTokens.AccentDeep, rdp(20))
                 }
-                Wallet(snapshot.diamonds, copy.t(Copy.ProfileDiamonds)) {
+                Wallet(snapshot.diamonds, copy.t(Copy.ProfileDiamonds), onBalance) {
                     ProfileIco.Diamond(ProfileTokens.AccentDeep, rdp(20))
                 }
             }
@@ -789,6 +923,14 @@ private fun ProfileHeader(
                     leading = { ProfileIco.ShareMini(ProfileTokens.Text) },
                 )
             }
+
+            // Store boxes: Frame · Badge · Entry · VIP · Free — one per active
+            // category, centered, each opening its own listing and "My …" tab.
+            // Account shortcuts moved out of the hamburger: Wallet / Coins,
+            // Gifting record, My Live, My Rewards, My roles.
+            ProfileQuickRow(copy = copy, onAction = onQuick)
+            // Then the store: one box per active category, plus Free.
+            StoreShelfRow(copy = copy, shelf = shelf, now = System.currentTimeMillis(), onOpen = onStore)
         }
 
         Row(
@@ -1007,13 +1149,14 @@ private fun RowScope.Stat(value: String, label: String, divider: Boolean, onClic
 }
 
 @Composable
-private fun RowScope.Wallet(value: String, label: String, icon: @Composable () -> Unit) {
+private fun RowScope.Wallet(value: String, label: String, onClick: () -> Unit, icon: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .weight(1f)
             .clip(RoundedCornerShape(rdp(12)))
             .background(ProfileTokens.Bg2)
             .border(rdp(1), ProfileTokens.Border, RoundedCornerShape(rdp(12)))
+            .pressable(onClick = onClick)
             .padding(vertical = rdp(10)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

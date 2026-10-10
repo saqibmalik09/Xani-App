@@ -54,8 +54,20 @@ fun LiveChatLine(
     onUser: (() -> Unit)? = null,
     onHold: (() -> Unit)? = null,
     onReact: ((String) -> Unit)? = null,
+    /** How a "like" system line reads after the name ("liked the LIVE ❤️"), localised by the caller. */
+    likeLabel: String = "",
+    /** How an "enter" system line reads after the name ("has entered the room 👋"). */
+    enterLabel: String = "",
+    /** How a "leave" system line reads after the name ("has left the room"). */
+    leaveLabel: String = "",
 ) {
     val name = m.user.fullName.ifBlank { m.user.username }.ifBlank { "…" }
+    val body = when (m.event) {
+        "like" -> likeLabel.ifBlank { "❤️" }
+        "enter" -> enterLabel.ifBlank { "👋" }
+        "leave" -> leaveLabel.ifBlank { "…" }
+        else -> m.text
+    }
     val settled = m.id != 0L
     val to = m.to?.let { p -> p.fullName.ifBlank { p.username } }?.takeIf { it.isNotBlank() }
     val gestures = if (onHold != null || onUser != null) {
@@ -91,11 +103,16 @@ fun LiveChatLine(
                     XaniText("@$to", Type.LabelBold, color = Color(0xFFA78BFA), fontSizeOverride = nameSize, maxLines = 1)
                 }
             }
-            if (m.text.isNotEmpty()) {
+            if (body.isNotEmpty()) {
                 XaniText(
-                    m.text,
+                    body,
                     Type.Caption,
-                    color = Color.White.copy(alpha = if (settled) 0.92f else 0.6f),
+                    color = when (m.event) {
+                        "like" -> Color(0xFFF9A8D4)
+                        "enter" -> Color(0xFF6EE7B7)
+                        "leave" -> Color.White.copy(alpha = 0.55f)
+                        else -> Color.White.copy(alpha = if (settled) 0.92f else 0.6f)
+                    },
                     fontSizeOverride = textSize,
                 )
             }

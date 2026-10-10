@@ -1,0 +1,4 @@
+#Thu Oct 08 16:57:10 PKT 2026
+base.0=C\:\\projects\\tiktok-global-platform\\client-apps\\play-ownership-apk\\app\\build\\intermediates\\dex\\release\\mergeDexRelease\\classes.dex
+path.0=classes.dex
+renamed.0=classes.dex

@@ -1,21 +1,31 @@
 import { useState, type FormEvent } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
-import { DASHBOARD_PERM, useAuth } from '../lib/auth'
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { canEnterConsole, useAuth } from '../lib/auth'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { PageLoader } from '../ui/Loader'
 
+function safeNext(raw: string | null): string {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/'
+  return raw
+}
+
 export function LoginPage() {
   const { ready, session, can, login, appName } = useAuth()
   const nav = useNavigate()
+  const [params] = useSearchParams()
+  const next = safeNext(params.get('next'))
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   if (!ready) return <PageLoader label="Starting…" />
+  // Same gate as RequireAuth: platform dashboard perm OR any live role membership.
+  // Join links (/join/…) are allowed through even without console seats.
   if (session) {
-    return <Navigate to={can(DASHBOARD_PERM) ? '/' : '/forbidden'} replace />
+    if (next.startsWith('/join/')) return <Navigate to={next} replace />
+    return <Navigate to={canEnterConsole(session, can) ? next || '/' : '/forbidden'} replace />
   }
 
   async function onSubmit(e: FormEvent) {
@@ -32,7 +42,7 @@ export function LoginPage() {
       setError(r.message)
       return
     }
-    nav('/', { replace: true })
+    nav(next.startsWith('/join/') ? next : '/', { replace: true })
   }
 
   return (
@@ -72,9 +82,7 @@ export function LoginPage() {
           >
             {appName}
           </div>
-          <div style={{ marginTop: 4, fontSize: 14, color: 'var(--muted)' }}>
-            Sign in to the console
-          </div>
+          <div style={{ marginTop: 4, fontSize: 14, color: 'var(--muted)' }}>Sign in to the console</div>
         </div>
 
         <Field

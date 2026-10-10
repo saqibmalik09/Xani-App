@@ -56,9 +56,11 @@ internal class WebRtcPeer(
     private var makingOffer = false
     private var closed = false
     private val capture = when (DeviceClass.read(app)) {
-        DeviceClass.Low -> Capture(480, 360, 20, 350)
-        DeviceClass.Mid -> Capture(640, 480, 24, 600)
-        DeviceClass.High -> Capture(960, 540, 24, 900)
+        // Sharper 16:9 ladder — old 4:3 mid/low + 360p made local preview soft
+        // and odd crops looked zoomed when FILL'd into the PIP / full view.
+        DeviceClass.Low -> Capture(640, 360, 24, 500)
+        DeviceClass.Mid -> Capture(960, 540, 28, 900)
+        DeviceClass.High -> Capture(1280, 720, 30, 1500)
     }
 
     init {
@@ -173,7 +175,8 @@ internal class WebRtcPeer(
         val track = localTrack ?: return null
         return localView ?: TextureViewRenderer(context).also {
             it.init(engine.egl.eglBaseContext, null)
-            it.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            // FIT in the PIP so the face is not cropped/zoomed; remote stays FILL.
+            it.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             it.setMirror(front)
             it.setEnableHardwareScaler(true)
             track.addSink(it)

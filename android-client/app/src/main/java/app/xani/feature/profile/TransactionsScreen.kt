@@ -756,12 +756,26 @@ private fun PurchaseRow(copy: Copy, p: TxnPurchaseData) {
 private fun EntryRow(copy: Copy, e: TxnEntryData) {
     val cat = TxnCategory.entries.firstOrNull { it.key == e.category }
     val label = if (cat != null) copy.t(txnCategoryLabel(cat)) else e.category
+    // Who: the other side of a gift, or the staff member behind an adjustment.
+    val who = buildString {
+        e.peer?.let { append(copy.t(Copy.TxnWith, "name" to personName(it))) }
+        e.actor?.let {
+            if (isNotEmpty()) append(" · ")
+            append(copy.t(Copy.TxnBy, "name" to personName(it)))
+        }
+    }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = rdp(20), vertical = rdp(12)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            XaniText(label, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 14f, maxLines = 1)
+            XaniText(e.note.ifEmpty { label }, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 14f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (e.note.isNotEmpty() || who.isNotEmpty()) {
+                XaniText(
+                    listOf(label, who).filter { it.isNotEmpty() }.joinToString(" · "),
+                    Type.Caption, color = ProfileTokens.Sub, fontSizeOverride = 11f, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             XaniText(txnStamp(e.atMs), Type.Micro, color = ProfileTokens.Sub, fontSizeOverride = 10f)
         }
         Column(horizontalAlignment = Alignment.End) {
@@ -772,6 +786,10 @@ private fun EntryRow(copy: Copy, e: TxnEntryData) {
     }
     Box(Modifier.fillMaxWidth().padding(horizontal = rdp(20)).height(rdp(1)).background(ProfileTokens.RowLine))
 }
+
+/** Display name for a statement line: full name, else @handle, else the id. */
+internal fun personName(p: app.xani.core.net.LiveHostData): String =
+    p.fullName.ifBlank { if (p.username.isNotBlank()) "@${p.username}" else "#${p.id}" }
 
 @Composable
 private fun EmptyLine(text: String) {

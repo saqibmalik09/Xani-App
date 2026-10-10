@@ -89,6 +89,24 @@ object LiveFeed {
     /** Inbox notifications tab: moderation and product notices. */
     val notices: SharedFlow<NoticeData> = _notices
 
+    private val _rewards = MutableSharedFlow<RewardToast>(
+        replay = 0,
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** A live-time reward landed: the HUD toast and My Rewards refresh. Dedupe on ledgerId. */
+    val rewards: SharedFlow<RewardToast> = _rewards
+
+    private val _gifting = MutableSharedFlow<GiftingUserEvent>(
+        replay = 0,
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** A gift reached or left this account: statements and totals move at once. */
+    val gifting: SharedFlow<GiftingUserEvent> = _gifting
+
     /** Connection state, so the thread header can say "Connecting…" honestly. */
     private val _connected = kotlinx.coroutines.flow.MutableStateFlow(false)
     val connected: kotlinx.coroutines.flow.StateFlow<Boolean> = _connected
@@ -143,6 +161,14 @@ object LiveFeed {
     private var job: Job? = null
 
     /**
+     * Which connection the flows belong to. A cancelled stream finishes after its
+     * replacement has started, so it only clears [connected] while it is still the
+     * current one — otherwise a re-dial would report itself down right after
+     * coming up.
+     */
+    private var generation = 0
+
+    /**
      * Keeps the connection open for as long as the calling coroutine lives.
      * Suspends until cancelled.
      */
@@ -159,6 +185,13 @@ object LiveFeed {
         synchronized(lock) {
             holders++
             if (job?.isActive == true) return
+            launchStream()
+        }
+    }
+
+    private fun launchStream() {
+        synchronized(lock) {
+            val gen = ++generation
             job = scope.launch {
                 try {
                     Xani.profile.stream(
@@ -179,11 +212,36 @@ object LiveFeed {
                         onCall = { name, data -> CallEvent.from(name, data)?.let { _call.tryEmit(it) } },
                         onActivity = { _activity.tryEmit(it) },
                         onNotice = { _notices.tryEmit(it) },
+                        // A moderator changed this account's permissions: pull
+                        // /v1/auth/me now so FLAG_SECURE and mic gates flip live.
+                        onAccess = { scope.launch { Xani.session.resync() } },
+                        // Admin toggled a released version: re-check this build's gate.
+                        onVersion = { scope.launch { AppGate.refresh() } },
+                        onReward = { _rewards.tryEmit(it) },
+                        onGifting = { _gifting.tryEmit(it) },
                     )
                 } finally {
-                    _connected.value = false
+                    synchronized(lock) { if (gen == generation) _connected.value = false }
                 }
             }
+        }
+    }
+
+    /**
+     * Drops the socket and dials again for whoever is signed in now.
+     *
+     * The stream carries the account in its bearer, so an account switch has to
+     * re-dial: otherwise every push — profile, balance, chat, calls — still
+     * belongs to the account the user just left. Holders keep their
+     * subscriptions; the first frame of the new connection is the new account's
+     * profile.
+     */
+    fun restart() {
+        synchronized(lock) {
+            job?.cancel()
+            job = null
+            _connected.value = false
+            if (holders > 0) launchStream()
         }
     }
 

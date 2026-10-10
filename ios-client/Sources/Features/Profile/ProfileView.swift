@@ -99,6 +99,7 @@ struct ProfileView: View {
                     onReport: { drawer = false; route = .report },
                     onTerms: { drawer = false; route = .terms },
                     onRoles: { drawer = false; roleRequestId = 0; route = .roles },
+                    onRewards: { drawer = false; route = .rewards },
                     onLogout: {
                         drawer = false
                         Xani.session.signOut()
@@ -154,6 +155,10 @@ struct ProfileView: View {
                     .zIndex(30)
             case .roles:
                 RolesView(onBack: { route = .home; roleRequestId = 0 }, startRequestId: roleRequestId)
+                    .transition(.move(edge: .trailing))
+                    .zIndex(30)
+            case .rewards:
+                MyRewardsView(onBack: { route = .home })
                     .transition(.move(edge: .trailing))
                     .zIndex(30)
             case .home:

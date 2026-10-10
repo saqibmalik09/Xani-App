@@ -6,7 +6,7 @@ enum ProfileSort { case latest, popular }
 enum ProfileStatsKind { case following, followers, receiving }
 enum ProfileGender { case male, female, preferNot }
 enum ReceivingPeriod { case daily, weekly, monthly }
-enum ProfileRoute { case home, edit, settings, password, stats, visits, help, report, terms, roles }
+enum ProfileRoute { case home, edit, settings, password, stats, visits, help, report, terms, roles, rewards }
 
 /// One grid cell. `views` doubles as the searchable label; `likes` is the count shown.
 struct ProfilePost: Identifiable, Equatable {

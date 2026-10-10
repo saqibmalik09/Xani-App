@@ -46,6 +46,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -548,6 +549,8 @@ fun ChatThread(
                                 (msg.kind == MsgKind.Image || msg.kind == MsgKind.Video || msg.kind == MsgKind.Ai) && !msg.mediaUri.isNullOrBlank() -> viewMedia = msg
                                 msg.kind == MsgKind.Location -> openMaps(ctx, msg.text)
                                 msg.kind == MsgKind.Event -> editEvent = msg
+                                msg.kind == MsgKind.Voice -> VoicePlayer.toggle(msg.id, msg.mediaUri)
+                                msg.kind == MsgKind.System && parseCallMsg(msg.text) != null -> Unit
                                 else -> flashId = msg.id
                             }
                         },
@@ -1092,6 +1095,11 @@ private fun MessageBubble(
             ) {
                 when (msg.kind) {
                     MsgKind.Voice -> VoiceChip(msg, mine, if (mine) Color.White else theirText)
+                    MsgKind.System -> {
+                        val call = parseCallMsg(msg.text)
+                        if (call != null) CallChip(call, mine, if (mine) Color.White else theirText, copy)
+                        else XaniText(msg.text, Type.Label, color = if (mine) Color.White else theirText)
+                    }
                     MsgKind.Contact -> ContactCard(
                         msg, mine, if (mine) Color.White else theirText, copy,
                         onMessage = {
@@ -1493,6 +1501,8 @@ private fun ContactCard(
 
 @Composable
 private fun VoiceChip(msg: ChatMessage, mine: Boolean, ink: Color) {
+    val playingId by VoicePlayer.playingId.collectAsState()
+    val playing = playingId == msg.id
     val bars = intArrayOf(10, 18, 8, 22, 14, 26, 12, 20, 16, 24, 9, 17)
     Row(
         Modifier.width(rdp(220)),
@@ -1500,9 +1510,21 @@ private fun VoiceChip(msg: ChatMessage, mine: Boolean, ink: Color) {
         horizontalArrangement = Arrangement.spacedBy(rdp(8)),
     ) {
         Box(
-            Modifier.size(rdp(36)).clip(CircleShape).background(if (mine) Color.White.copy(alpha = 0.22f) else Color.White),
+            Modifier
+                .size(rdp(36))
+                .clip(CircleShape)
+                .background(if (mine) Color.White.copy(alpha = 0.22f) else Color.White),
             contentAlignment = Alignment.Center,
-        ) { ChatIco.Play(if (mine) Color.White else Color(0xFF111111), rdp(14)) }
+        ) {
+            if (playing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(rdp(3))) {
+                    Box(Modifier.width(rdp(3)).height(rdp(12)).background(if (mine) Color.White else Color(0xFF111111)))
+                    Box(Modifier.width(rdp(3)).height(rdp(12)).background(if (mine) Color.White else Color(0xFF111111)))
+                }
+            } else {
+                ChatIco.Play(if (mine) Color.White else Color(0xFF111111), rdp(14))
+            }
+        }
         Row(
             Modifier.weight(1f).height(rdp(28)),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1514,11 +1536,43 @@ private fun VoiceChip(msg: ChatMessage, mine: Boolean, ink: Color) {
                         .width(rdp(3))
                         .height(rdp(h))
                         .clip(RoundedCornerShape(rdp(2)))
-                        .background(ink.copy(alpha = 0.85f)),
+                        .background(ink.copy(alpha = if (playing) 1f else 0.85f)),
                 )
             }
         }
         XaniText(msg.text.ifBlank { "0:07" }, Type.Micro, color = ink.copy(alpha = 0.85f), fontSizeOverride = 11f)
+    }
+}
+
+@Composable
+private fun CallChip(call: CallMsg, mine: Boolean, ink: Color, copy: Copy) {
+    val label = if (call.video) "Video call" else "Voice call"
+    val status = when (call.status) {
+        "ongoing" -> copy.t(Copy.CallOngoing)
+        "declined" -> copy.t(Copy.CallDeclined)
+        "missed" -> copy.t(Copy.CallMissed)
+        "cancelled" -> copy.t(Copy.CallEnded)
+        "busy" -> copy.t(Copy.CallBusy)
+        else -> if (call.durationSec > 0) formatCallClock(call.durationSec) else copy.t(Copy.CallEnded)
+    }
+    Row(
+        Modifier.widthIn(max = rdp(220)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(rdp(10)),
+    ) {
+        Box(
+            Modifier
+                .size(rdp(36))
+                .clip(CircleShape)
+                .background(if (mine) Color.White.copy(alpha = 0.22f) else Color.White),
+            contentAlignment = Alignment.Center,
+        ) {
+            XaniText(if (call.video) "📹" else "📞", Type.Label, fontSizeOverride = 14f)
+        }
+        Column {
+            XaniText(label, Type.LabelBold, color = ink, fontSizeOverride = 13f)
+            XaniText(status, Type.Micro, color = ink.copy(alpha = 0.8f), fontSizeOverride = 11f)
+        }
     }
 }
 

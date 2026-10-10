@@ -63,6 +63,13 @@
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone|camera" />
 
+        <!-- Hosting / on stage: capture stays alive off-screen; a swiped task ends the room as app_closed. -->
+        <service
+            android:name=".feature.call.LiveHostService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="microphone|camera" />
+
         <service
             android:name=".feature.call.XaniMessagingService"
             android:exported="false">
@@ -81,22 +88,26 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.App"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Referral links: https://host/join/CODE opens the join form prefilled. -->
+            <!-- Optional verified https App Links when DEEP_LINK_HOST is set at build.
+                 Share URLs themselves always come from dashboard Website URL (/v1/config). -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="${deepLinkHost}"
-                    android:pathPrefix="/join"
-                    android:scheme="https" />
+                <data android:scheme="https" android:host="${deepLinkHost}" android:pathPrefix="/join" />
+                <data android:scheme="https" android:host="${deepLinkHost}" android:pathPrefix="/u/" />
+                <data android:scheme="https" android:host="${deepLinkHost}" android:pathPrefix="/@" />
+                <data android:scheme="https" android:host="${deepLinkHost}" android:pathPrefix="/live" />
             </intent-filter>
+            <!-- Custom scheme always works; web landing pages open the app this way
+                 so a domain change in branding needs no APK rebuild. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

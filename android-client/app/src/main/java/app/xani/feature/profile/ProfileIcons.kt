@@ -89,26 +89,31 @@ internal object ProfileIco {
         modifier = Modifier.size(size),
     )
 
-    /** Wallet row: coin (filled disc + rim). */
+    /**
+     * Wallet row: a stack of coins. Plural reads as a balance, and three flat
+     * ellipses stay crisp where a medallion's engraved glyph turns to mush.
+     */
     @Composable
     fun Coin(tint: Color, size: Dp = rdp(20)) = VectorCanvas(
         shapes = listOf(
-            VShape.Circle(12f, 12f, 9f, fill(tint.copy(alpha = 0.18f))),
-            VShape.Circle(12f, 12f, 9f, stroke(tint, 1.6f)),
-            VShape.Circle(12f, 12f, 5.5f, stroke(tint, 1.4f)),
-            VShape.D("M12 8.2v7.6M10.2 10.2c.5-.7 1.4-1.1 2.3-1.1 1.4 0 2.3.7 2.3 1.7 0 2.2-4.6 1.1-4.6 3.2 0 .9.9 1.6 2.3 1.6.9 0 1.7-.3 2.2-.9", stroke(tint, 1.4f)),
+            VShape.D("M4.4 8.4v7.2c0 1.5 3.4 2.7 7.6 2.7s7.6-1.2 7.6-2.7V8.4z", fill(tint.copy(alpha = 0.16f))),
+            VShape.D("M4.4 8.4v7.2c0 1.5 3.4 2.7 7.6 2.7s7.6-1.2 7.6-2.7V8.4", stroke(tint, 1.7f)),
+            VShape.Ellipse(12f, 8.4f, 7.6f, 2.7f, fill(tint.copy(alpha = 0.22f))),
+            VShape.Ellipse(12f, 8.4f, 7.6f, 2.7f, stroke(tint, 1.7f)),
+            VShape.D("M4.4 12c0 1.5 3.4 2.7 7.6 2.7s7.6-1.2 7.6-2.7", stroke(tint, 1.4f)),
         ),
         viewport = 24f,
         modifier = Modifier.size(size),
     )
 
-    /** Wallet row: diamond gem. */
+    /** Wallet row: brilliant-cut gem — crown, girdle, pavilion to a point. */
     @Composable
     fun Diamond(tint: Color, size: Dp = rdp(20)) = VectorCanvas(
         shapes = listOf(
-            VShape.D("M12 3l8 6.5-8 11.5L4 9.5z", fill(tint.copy(alpha = 0.18f))),
-            VShape.D("M12 3l8 6.5-8 11.5L4 9.5z", stroke(tint, 1.6f)),
-            VShape.D("M4 9.5h16M12 3l-3.5 6.5L12 21l3.5-11.5L12 3z", stroke(tint, 1.3f)),
+            VShape.D("M7.6 4.4h8.8L20 9.6 12 20.4 4 9.6z", fill(tint.copy(alpha = 0.16f))),
+            VShape.D("M7.6 4.4h8.8L20 9.6 12 20.4 4 9.6z", stroke(tint, 1.7f)),
+            VShape.D("M4 9.6h16", stroke(tint, 1.5f)),
+            VShape.D("M7.6 4.4l2.2 5.2L12 20.4l2.2-10.8 2.2-5.2", stroke(tint, 1.3f)),
         ),
         viewport = 24f,
         modifier = Modifier.size(size),
@@ -228,6 +233,57 @@ internal object ProfileIco {
     @Composable
     fun Path(d: String, tint: Color, size: Dp = rdp(18)) = VectorCanvas(
         shapes = listOf(VShape.D(d, stroke(tint, 1.7f))),
+        viewport = 24f,
+        modifier = Modifier.size(size),
+    )
+
+    /** History: a clock face wound back by an arrow — "what happened before". */
+    @Composable
+    fun History(tint: Color, size: Dp = rdp(18)) = VectorCanvas(
+        shapes = listOf(
+            VShape.D("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", stroke(tint, 1.7f)),
+            VShape.D("M3 3v5h5", stroke(tint, 1.7f)),
+            VShape.D("M12 7v5l4 2", stroke(tint, 1.7f)),
+        ),
+        viewport = 24f,
+        modifier = Modifier.size(size),
+    )
+
+    /** Transaction history: a receipt — rounded slip, zigzag foot, three lines. */
+    @Composable
+    fun Receipt(tint: Color, size: Dp = rdp(18)) = VectorCanvas(
+        shapes = listOf(
+            VShape.D("M6 3h12v18l-2-1.6-2 1.6-2-1.6-2 1.6-2-1.6L6 21z", stroke(tint, 1.6f)),
+            VShape.Line(9f, 8f, 15f, 8f, stroke(tint, 1.5f)),
+            VShape.Line(9f, 11.5f, 15f, 11.5f, stroke(tint, 1.5f)),
+            VShape.Line(9f, 15f, 13f, 15f, stroke(tint, 1.5f)),
+        ),
+        viewport = 24f,
+        modifier = Modifier.size(size),
+    )
+
+    /** Roles: an org chart — one node over two, joined by a bracket. */
+    @Composable
+    fun Roles(tint: Color, size: Dp = rdp(18)) = VectorCanvas(
+        shapes = listOf(
+            VShape.Box(9f, 3f, 6f, 5f, 1.5f, stroke(tint, 1.6f)),
+            VShape.Box(3f, 16f, 6f, 5f, 1.5f, stroke(tint, 1.6f)),
+            VShape.Box(15f, 16f, 6f, 5f, 1.5f, stroke(tint, 1.6f)),
+            VShape.D("M12 8v4M6 16v-4h12v4", stroke(tint, 1.6f)),
+        ),
+        viewport = 24f,
+        modifier = Modifier.size(size),
+    )
+
+    /** Find friends: two people — a near head and shoulders, a second behind. */
+    @Composable
+    fun People(tint: Color, size: Dp = rdp(18)) = VectorCanvas(
+        shapes = listOf(
+            VShape.Circle(9f, 8f, 3.4f, stroke(tint, 1.6f)),
+            VShape.D("M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6", stroke(tint, 1.6f)),
+            VShape.D("M15.5 4.9c1.6.4 2.6 1.7 2.6 3.1s-1 2.7-2.6 3.1", stroke(tint, 1.6f)),
+            VShape.D("M17.3 14.3c2.5.6 4.2 2.7 4.2 5.7", stroke(tint, 1.6f)),
+        ),
         viewport = 24f,
         modifier = Modifier.size(size),
     )

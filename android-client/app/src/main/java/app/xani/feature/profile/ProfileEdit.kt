@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
+import app.xani.core.net.MediaConfig
 import app.xani.i18n.Copy
 import app.xani.ui.brand.LocalBrand
 import app.xani.ui.components.XaniText
@@ -189,8 +190,14 @@ internal fun ProfileEditScreen(
                             .padding(horizontal = rdp(14), vertical = rdp(10)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // The public link base is the dashboard's web host from
+                        // /v1/config, never a hardcoded domain: a white-label
+                        // deployment serves its profiles from its own site. The
+                        // build's slug form shows only until config has answered.
+                        val dynamicLink = MediaConfig.profileLink(username)
+                        val displayLink = dynamicLink.ifEmpty { "${brand.slug}.app/@$username" }
                         XaniText(
-                            "${brand.wordmark.lowercase()}.app/@$username",
+                            displayLink,
                             Type.Caption,
                             color = ProfileTokens.Sub,
                             fontSizeOverride = 13f,
@@ -200,15 +207,23 @@ internal fun ProfileEditScreen(
                             Modifier
                                 .size(rdp(32))
                                 .pressable(onClick = {
-                                    val cm = context.getSystemService(ClipboardManager::class.java)
-                                    cm?.setPrimaryClip(
-                                        ClipData.newPlainText(
-                                            "link",
-                                            "${brand.wordmark.lowercase()}.app/@$username",
-                                        ),
-                                    )
-                                    copied = true
                                     scope.launch {
+                                        // Copy the real link. If config has not
+                                        // landed yet, pull it once, then fall back
+                                        // to the display form only if still absent.
+                                        var link = MediaConfig.profileLink(username)
+                                        if (link.isEmpty()) {
+                                            MediaConfig.refresh()
+                                            link = MediaConfig.profileLink(username)
+                                        }
+                                        val cm = context.getSystemService(ClipboardManager::class.java)
+                                        cm?.setPrimaryClip(
+                                            ClipData.newPlainText(
+                                                "link",
+                                                link.ifEmpty { "${brand.slug}.app/@$username" },
+                                            ),
+                                        )
+                                        copied = true
                                         delay(1800)
                                         copied = false
                                     }
@@ -434,7 +449,8 @@ private fun usernameHint(
         copy.t(Copy.ProfileUsernameAgainIn, "n" to daysLeft.toString()) to ProfileTokens.Danger
 
     state == UsernameState.Checking -> copy.t(Copy.ProfileUsernameChecking) to ProfileTokens.Sub
-    else -> copy.t(Copy.ProfileUsernameLocked) to ProfileTokens.Sub
+    // The window the server actually enforces, from Settings → Profile.
+    else -> copy.t(Copy.ProfileUsernameLocked, "n" to MediaConfig.usernameChangeDays.toString()) to ProfileTokens.Sub
 }
 
 private fun genderLabel(copy: Copy, g: ProfileGender): String = copy.t(

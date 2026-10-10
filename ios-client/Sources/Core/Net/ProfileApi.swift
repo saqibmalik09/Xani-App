@@ -143,6 +143,8 @@ struct ProfileApi {
         onCall: @escaping @Sendable (CallEvent) -> Void = { _ in },
         onProfileViews: @escaping @Sendable (Int64) -> Void = { _ in },
         onNotice: @escaping @Sendable (NoticeData) -> Void = { _ in },
+        onReward: @escaping @Sendable (RewardToast) -> Void = { _ in },
+        onGifting: @escaping @Sendable (GiftingUserEvent) -> Void = { _ in },
         onOpen: @escaping @Sendable () -> Void = {},
         onResync: @escaping @Sendable () -> Void
     ) async {
@@ -150,6 +152,11 @@ struct ProfileApi {
             // Chat rides the same socket under its own prefix.
             if name.hasPrefix("chat_") {
                 if let ev = ChatEvent.decode(name: name, data: data) { onChat(ev) }
+                return
+            }
+            // A gift this account received or sent, with the day's running totals.
+            if name.hasPrefix("gift_") {
+                if let ev = GiftingUserEvent.decode(name: name, data: data) { onGifting(ev) }
                 return
             }
             // Call signalling and live-room frames share the socket too.
@@ -193,6 +200,11 @@ struct ProfileApi {
             case "notice":
                 if let frame = try? decoder.decode(Frame<NoticeData>.self, from: data) {
                     onNotice(frame.data)
+                }
+            // A live-time reward landed or became claimable: the HUD toast.
+            case "reward_toast":
+                if let frame = try? decoder.decode(Frame<RewardToast>.self, from: data), frame.data.ledgerId > 0 {
+                    onReward(frame.data)
                 }
             default:
                 break

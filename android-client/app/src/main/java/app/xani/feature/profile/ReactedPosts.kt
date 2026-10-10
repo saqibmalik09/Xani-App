@@ -51,8 +51,20 @@ class ReactedPosts private constructor(private val like: Boolean) {
     @Volatile
     private var stale = false
 
+    /** Whose reactions these are, so a switched account never sees them. */
+    @Volatile
+    private var owner = 0L
+
     /** Called when the tab comes on screen; costs a read only when it has to. */
     fun open() {
+        val me = Xani.session.currentUserId
+        if (me != owner) {
+            owner = me
+            job?.cancel()
+            job = null
+            stale = false
+            _state.value = State()
+        }
         synchronized(this) {
             if (!listening) {
                 listening = true
@@ -68,6 +80,7 @@ class ReactedPosts private constructor(private val like: Boolean) {
         job?.cancel()
         job = null
         stale = false
+        owner = 0L
         _state.value = State()
     }
 

@@ -65,8 +65,14 @@ internal class WebRtcEngine(private val app: Context) : RtcEngine {
     override fun createPeer(ice: List<IceServerData>, relayOnly: Boolean, video: Boolean, listener: RtcPeer.Listener): RtcPeer =
         WebRtcPeer(app, this, ice, relayOnly, video, listener)
 
-    override fun joinRoom(url: String, token: String, video: Boolean, publish: Boolean, listener: RtcRoom.Listener): RtcRoom =
-        LiveKitRoom(app, url, token, video, publish, listener, hardwareH264)
+    override fun joinRoom(
+        url: String,
+        token: String,
+        video: Boolean,
+        publish: Boolean,
+        listener: RtcRoom.Listener,
+        secondary: Boolean,
+    ): RtcRoom = LiveKitRoom(app, url, token, video, publish, listener, hardwareH264, secondary)
 
     override fun release() {
         runFeature(Unit) { factory.dispose() }

@@ -44,6 +44,7 @@ import app.xani.feature.social.LevelMark
 import app.xani.feature.social.PersonAvatar
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
+import app.xani.ui.components.pressable
 import app.xani.ui.theme.Type
 import app.xani.ui.theme.rdp
 import com.airbnb.lottie.LottieComposition
@@ -84,6 +85,8 @@ internal class GiftOverlayState(private val scope: CoroutineScope) {
         val receiver: LivePersonData,
         val gift: GiftData,
         count: Int,
+        /** How many more people than [receiver] this send landed on (multi-select). */
+        val extra: Int = 0,
     ) {
         var count by mutableStateOf(count)
         var bump by mutableStateOf(0)
@@ -140,7 +143,10 @@ internal class GiftOverlayState(private val scope: CoroutineScope) {
                 oldest.expiry?.cancel()
                 banners.remove(oldest)
             }
-            Banner(key, ev.sender, ev.receiver, ev.gift, if (ev.combo > 1) ev.combo else hit).also { banners.add(it) }
+            Banner(
+                key, ev.sender, ev.receiver, ev.gift, if (ev.combo > 1) ev.combo else hit,
+                extra = (ev.receivers.size - 1).coerceAtLeast(0),
+            ).also { banners.add(it) }
         }
         b.expiry?.cancel()
         b.expiry = scope.launch {
@@ -281,17 +287,27 @@ internal fun rememberGiftOverlayState(roomId: Long): GiftOverlayState {
     return state
 }
 
-/** Draws over the broadcast; place last-but-one in the room's Box (under dialogs). */
+/**
+ * Draws over the broadcast; place last-but-one in the room's Box (under dialogs).
+ * [onUser]: a tap on a banner's sender — their card, where the host and
+ * moderators also find mute / block / kick, the same as a tap on their chat line.
+ */
 @Composable
-internal fun GiftOverlay(state: GiftOverlayState, copy: Copy, modifier: Modifier = Modifier) {
+internal fun GiftOverlay(
+    state: GiftOverlayState,
+    copy: Copy,
+    modifier: Modifier = Modifier,
+    onUser: ((LivePersonData) -> Unit)? = null,
+) {
     val ctx = LocalContext.current
     LaunchedEffect(Unit) {
         SvgaLoader.screenWidthPx = ctx.resources.displayMetrics.widthPixels
         // Sprites decode on a background thread while the first gift is still
         // in flight; the surface itself costs nothing until a movie is set.
     }
-    // Nothing in this Box takes pointer input: every tap falls through to the
-    // broadcast chrome beneath, even while a gift is playing.
+    // Only the banners take pointer input (a tap opens the sender's card);
+    // everywhere else the tap falls through to the broadcast chrome beneath,
+    // even while a gift is playing.
     Box(modifier.fillMaxSize()) {
         SvgaPlayer(state.player, Modifier.fillMaxSize())
         val p = state.playing
@@ -314,7 +330,7 @@ internal fun GiftOverlay(state: GiftOverlayState, copy: Copy, modifier: Modifier
             verticalArrangement = Arrangement.spacedBy(rdp(8)),
         ) {
             for (b in state.banners) {
-                androidx.compose.runtime.key(b.key) { GiftBanner(b, copy) }
+                androidx.compose.runtime.key(b.key) { GiftBanner(b, copy, onUser) }
             }
         }
     }
@@ -405,7 +421,7 @@ private fun ComboBadge(n: Int, modifier: Modifier) {
 }
 
 @Composable
-private fun GiftBanner(b: GiftOverlayState.Banner, copy: Copy) {
+private fun GiftBanner(b: GiftOverlayState.Banner, copy: Copy, onUser: ((LivePersonData) -> Unit)?) {
     val slide = remember(b) { Animatable(-1f) }
     val pop = remember(b) { Animatable(1f) }
     LaunchedEffect(b) { slide.animateTo(0f, tween(260, easing = FastOutSlowInEasing)) }
@@ -416,17 +432,21 @@ private fun GiftBanner(b: GiftOverlayState.Banner, copy: Copy) {
         }
     }
     val senderName = b.sender.fullName.ifBlank { b.sender.username }.ifBlank { "…" }
-    val toName = when {
+    val firstName = when {
         b.receiver.role == "host" -> copy.t(Copy.LiveGiftHost)
         b.receiver.fullName.isNotBlank() -> b.receiver.fullName
         b.receiver.username.isNotBlank() -> "@" + b.receiver.username
         else -> copy.t(Copy.LiveGiftHost)
     }
+    // A multi-select send names the first receiver and counts the rest:
+    // "sent Rose to Host +3" — one banner, one animation, however many landed.
+    val toName = if (b.extra > 0) copy.t(Copy.LiveGiftToOthers, "to" to firstName, "n" to b.extra.toString()) else firstName
     Row(
         Modifier
             .graphicsLayer { translationX = slide.value * size.width; alpha = 1f + slide.value * 0.6f }
             .clip(RoundedCornerShape(rdp(22)))
             .background(Brush.horizontalGradient(listOf(Color(0xCC7C3AED), Color(0x66EC4899), Color(0x0007070F))))
+            .then(if (onUser != null) Modifier.pressable(pressedScale = 0.97f, onClick = { onUser(b.sender) }) else Modifier)
             .padding(start = rdp(4), end = rdp(14), top = rdp(4), bottom = rdp(4)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(rdp(8)),

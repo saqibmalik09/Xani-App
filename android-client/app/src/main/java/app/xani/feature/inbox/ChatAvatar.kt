@@ -33,7 +33,7 @@ internal fun ChatAvatar(
     showOnline: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val url = remember(chat.avatarUrl) { MediaConfig.url(chat.avatarUrl.ifEmpty { null }) }
+    val url = remember(chat.avatarUrl) { MediaConfig.avatarUrl(chat.avatarUrl) }
     Box(modifier.size(size)) {
         Box(
             Modifier.fillMaxSize().clip(CircleShape).background(chat.tint),

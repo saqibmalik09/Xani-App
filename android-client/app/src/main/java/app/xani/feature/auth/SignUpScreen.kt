@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import app.xani.core.net.MediaConfig
 import app.xani.ui.components.AuthScaffold
 import app.xani.ui.components.BackIcon
 import app.xani.ui.components.BirthdayPicker
@@ -184,7 +185,9 @@ fun SignUpScreen(
                     prefix = "@",
                     keyboardType = KeyboardType.Ascii,
                     sanitize = ::sanitizeUsername,
-                    footnote = "You can change your username after 30 days.",
+                    // The lock window comes from Settings → Profile, so the
+                    // promise made here is the one the server keeps.
+                    footnote = "You can change your username after ${MediaConfig.usernameChangeDays} days.",
                 )
 
                 LightField(

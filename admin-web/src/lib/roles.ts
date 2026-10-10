@@ -52,10 +52,12 @@ export type RoleBrief = { id: number; code: string; slug: string; title: string;
 export type Policy = {
   approval: { mode: 'parent' | 'platform'; ttl_hours: number }
   recruitment: { self_apply: boolean; referral_apply: boolean }
+  /** Member self-service switches; may be absent on roles saved before them. */
+  membership?: { leave_upline: boolean; remove_downline: boolean; shift_upline: boolean }
 }
 
 /** Field types a role's application form may use (server vocabulary). */
-export type FieldType = 'text' | 'textarea' | 'number' | 'dropdown' | 'country' | 'phone'
+export type FieldType = 'text' | 'textarea' | 'number' | 'dropdown' | 'country' | 'phone' | 'whatsapp'
 
 export const FIELD_TYPES: { id: FieldType; label: string; hint: string }[] = [
   { id: 'text', label: 'Short text', hint: 'One line — name, ID number, bank account…' },
@@ -63,8 +65,40 @@ export const FIELD_TYPES: { id: FieldType; label: string; hint: string }[] = [
   { id: 'number', label: 'Number', hint: 'Digits only, with an optional min / max value.' },
   { id: 'dropdown', label: 'Dropdown', hint: 'Pick one of the options you list.' },
   { id: 'country', label: 'Country', hint: 'Country picker (stored as ISO code).' },
-  { id: 'phone', label: 'Phone / WhatsApp', hint: 'Phone number with country code.' },
+  { id: 'phone', label: 'Phone', hint: 'E.164 phone with country code, e.g. +923001234567.' },
+  { id: 'whatsapp', label: 'WhatsApp', hint: 'Same rules as phone — digits with country code.' },
 ]
+
+/** Normalize/validate a phone or WhatsApp answer (mirrors server). */
+export function normalizePhoneValue(raw: string): string | null {
+  const s = raw.trim()
+  if (!s) return null
+  let out = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === '+' && i === 0 && out.length === 0) {
+      out += '+'
+      continue
+    }
+    if (ch >= '0' && ch <= '9') {
+      out += ch
+      continue
+    }
+    if (ch === ' ' || ch === '-' || ch === '(' || ch === ')' || ch === '.' || ch === '\u00a0') continue
+    return null
+  }
+  if (!/^\+?[1-9]\d{6,14}$/.test(out)) return null
+  return out
+}
+
+export function phoneLikeField(f: FormField): boolean {
+  if (f.type === 'phone' || f.type === 'whatsapp') return true
+  const k = (f.key || '').toLowerCase()
+  if (['phone', 'mobile', 'whatsapp', 'wa', 'tel', 'cellphone', 'cell'].includes(k)) return true
+  if (k.includes('whatsapp') || k.includes('phone') || k.endsWith('_wa')) return true
+  const label = (f.label || '').toLowerCase()
+  return label.includes('whatsapp') || label.includes('wa number')
+}
 
 /**
  * One input on a role's application form. min/max are character counts for
@@ -223,7 +257,13 @@ export type Organisation = {
   uplines: Record<string, Membership[]>
 }
 
-export type ReferralCodeView = { code: string; membership_id: string; role: RoleBrief; target_roles: RoleBrief[] }
+export type ReferralCodeView = {
+  code: string
+  membership_id: string
+  role: RoleBrief
+  target_roles: RoleBrief[]
+  join_links?: { role: RoleBrief; url: string }[]
+}
 
 export type AuditEvent = {
   id: string
@@ -368,4 +408,34 @@ export function when(iso?: string): string {
   if (!iso) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+}
+
+/**
+ * Roles the current console context may browse, for the overview cards and the
+ * dynamic sidebar: every active role for a platform admin, otherwise only the
+ * active role's allowed child roles (its "sublines"). Returned roles keep their
+ * member_count so cards/badges can show live, per-role totals.
+ */
+export function visibleRolesForContext(
+  all: RoleView[],
+  active: { role_id: number } | null,
+  canPlatform: (slug: string) => boolean,
+): RoleView[] {
+  const live = all.filter((r) => r.status === ROLE_STATUS.active)
+  if (canPlatform('roles.view') || canPlatform('admin.view_dashboard')) return live
+  if (!active) return []
+  const self = live.find((r) => r.id === active.role_id)
+  if (!self) return []
+  const ids = new Set(self.child_role_ids || [])
+  const out = live.filter((r) => ids.has(r.id))
+  if (self.allow_same_role_child && !out.some((r) => r.id === self.id)) out.unshift(self)
+  return out
+}
+
+/** Resolve a role's child-role briefs to their full views (for member counts). */
+export function childRoleViews(role: RoleView, all: RoleView[]): RoleView[] {
+  const byId = new Map(all.map((r) => [r.id, r]))
+  return (role.child_role_ids || [])
+    .map((id) => byId.get(id))
+    .filter((r): r is RoleView => !!r && r.status === ROLE_STATUS.active)
 }

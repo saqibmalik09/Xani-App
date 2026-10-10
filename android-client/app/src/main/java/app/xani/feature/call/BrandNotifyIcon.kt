@@ -16,7 +16,7 @@ import kotlinx.coroutines.sync.withLock
 val BRAND_COLOR: Int = 0xFF7C3AED.toInt()
 
 /**
- * Large notification icon: dashboard favicon when configured, otherwise the
+ * Large notification icon: dashboard logo, else favicon, otherwise the
  * launcher foreground mark. Status-bar small icons stay [R.drawable.ic_stat_brand]
  * (monochrome) — Android will not tint a full-colour favicon in the status bar.
  */
@@ -30,7 +30,7 @@ object BrandNotifyIcon {
     private var cachedUrl: String = ""
 
     suspend fun large(context: Context): Bitmap? = lock.withLock {
-        val url = MediaConfig.faviconUrl()
+        val url = MediaConfig.logoUrl().ifEmpty { MediaConfig.faviconUrl() }
         if (url.isNotEmpty() && url == cachedUrl) cached?.let { return it }
         if (url.isNotEmpty()) {
             val fromNet = loadUrl(url)

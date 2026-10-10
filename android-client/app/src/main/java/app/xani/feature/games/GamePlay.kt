@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color as AndroidColor
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -40,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +63,10 @@ import app.xani.ui.theme.Type
 import app.xani.ui.theme.rdp
 import kotlinx.coroutines.launch
 
+/** In-game back (wave-game-front `closeWaveGame`) asks native to dismiss via this URL. */
+private const val WAVE_GAME_CLOSE_SCHEME = "xani-games"
+private const val WAVE_GAME_CLOSE_HOST = "close"
+
 /**
  * Shared Wave game surfaces: the WebView itself, an immersive full-screen host
  * (Games tab), and the half-mode pieces that layer a game over a live broadcast
@@ -75,7 +81,12 @@ import kotlinx.coroutines.launch
 /** The configured game WebView. One place owns the cookie/DOM/media flags. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-internal fun GameWebView(url: String, modifier: Modifier = Modifier) {
+internal fun GameWebView(
+    url: String,
+    onClose: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val closeLatest by rememberUpdatedState(onClose)
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -96,7 +107,22 @@ internal fun GameWebView(url: String, modifier: Modifier = Modifier) {
                 settings.cacheMode = WebSettings.LOAD_DEFAULT
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 settings.userAgentString = settings.userAgentString + " XaniGames/1.0"
-                webViewClient = WebViewClient()
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): Boolean {
+                        val uri = request?.url ?: return false
+                        if (
+                            uri.scheme.equals(WAVE_GAME_CLOSE_SCHEME, ignoreCase = true) &&
+                            uri.host.equals(WAVE_GAME_CLOSE_HOST, ignoreCase = true)
+                        ) {
+                            closeLatest()
+                            return true
+                        }
+                        return false
+                    }
+                }
                 webChromeClient = WebChromeClient()
                 loadUrl(url)
             }
@@ -136,7 +162,11 @@ internal fun GameFullScreen(url: String, onClose: () -> Unit) {
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        GameWebView(url = url, modifier = Modifier.fillMaxSize())
+        GameWebView(
+            url = url,
+            onClose = onClose,
+            modifier = Modifier.fillMaxSize(),
+        )
         GameBackButton(
             onClick = onClose,
             modifier = Modifier
@@ -230,7 +260,11 @@ internal fun GameHalfSheet(game: GameCard, url: String, onClose: () -> Unit) {
                 )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                GameWebView(url = url, modifier = Modifier.fillMaxSize())
+                GameWebView(
+                    url = url,
+                    onClose = ::dismiss,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             Spacer(Modifier.navigationBarsPadding())
         }

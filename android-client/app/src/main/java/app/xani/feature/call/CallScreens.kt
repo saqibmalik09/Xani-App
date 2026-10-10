@@ -41,7 +41,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.viewinterop.AndroidView
 import app.xani.core.device.DeviceClass
 import app.xani.core.media.RemoteImage
 import app.xani.core.net.MediaConfig
@@ -198,7 +197,7 @@ fun VideoCallScreen(ui: CallUi, copy: Copy) {
         // so the renderer handed to Compose is the one the stream is painting into.
         val remote = remember(ui.callId, ui.mode, ui.mediaRev, ui.remoteVideo, ui.participants) { CallController.remoteView(ctx) }
         if (remote != null && ui.remoteVideo) {
-            AndroidView(factory = { remote }, modifier = Modifier.fillMaxSize())
+            VideoSurface(remote, Modifier.fillMaxSize())
         } else {
             Box(Modifier.fillMaxSize().background(ui.peer.tint.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
                 PeerFace(ui.peer, rdp(120), 40f)
@@ -247,7 +246,7 @@ fun VideoCallScreen(ui: CallUi, copy: Copy) {
                     ) {
                         val local = remember(ui.callId, ui.mode, ui.mediaRev, ui.cameraOff) { if (ui.cameraOff) null else CallController.localView(ctx) }
                         if (local != null) {
-                            AndroidView(factory = { local }, modifier = Modifier.fillMaxSize())
+                            VideoSurface(local, Modifier.fillMaxSize())
                         } else {
                             XaniText(copy.t(Copy.CallYou), Type.LabelBold, color = Color.White, fontSizeOverride = 14f)
                         }
@@ -387,7 +386,7 @@ private fun BoxScope.AddParticipantSheet(ui: CallUi, copy: Copy, onClose: () -> 
 
 @Composable
 private fun PeerFace(peer: CallPeer, size: androidx.compose.ui.unit.Dp, fontSize: Float) {
-    val url = remember(peer.avatarUrl) { MediaConfig.url(peer.avatarUrl.ifEmpty { null }) }
+    val url = remember(peer.avatarUrl) { MediaConfig.avatarUrl(peer.avatarUrl) }
     Box(Modifier.size(size).clip(CircleShape).background(peer.tint), contentAlignment = Alignment.Center) {
         if (url.isNotEmpty()) {
             RemoteImage(url, Modifier.fillMaxSize(), maxEdge = 512, fallback = Color.Transparent)

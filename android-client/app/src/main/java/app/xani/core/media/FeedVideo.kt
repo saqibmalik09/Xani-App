@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import app.xani.core.isolate.runFeature
+import app.xani.core.net.AppForeground
 import kotlinx.coroutines.delay
 import java.util.concurrent.Executors
 
@@ -54,7 +56,13 @@ fun FeedVideo(
             onFirstFrame()
         }
     }
-    LaunchedEffect(holder, playing) { holder.setPlaying(playing) }
+    // Backgrounding the app must silence the clip: a TextureView keeps its
+    // SurfaceTexture alive across onStop, so the decoder — and its audio —
+    // would otherwise keep running with the screen gone. Gating on the
+    // process-wide foreground flag pauses on Home/app-switch and resumes
+    // exactly where it left off when the user comes back.
+    val foreground by AppForeground.visible.collectAsState()
+    LaunchedEffect(holder, playing, foreground) { holder.setPlaying(playing && foreground) }
     LaunchedEffect(holder, muted) { holder.setMuted(muted) }
     // Watch time is sampled, not observed: MediaPlayer has no position
     // callback, and a poll on the frame clock would cost a read per frame for a

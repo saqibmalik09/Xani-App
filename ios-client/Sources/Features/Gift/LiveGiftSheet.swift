@@ -58,8 +58,15 @@ struct LiveGiftSheet: View {
     @State private var people: [LivePersonData] = []
     @State private var receiverId: Int64 = 0
     @State private var categoryId: Int64 = 0
+    /// Sub-category inside the open root; 0 = all of it.
+    @State private var subId: Int64 = 0
     @State private var selectedId: Int64 = 0
     @State private var loading = true
+    /// The engine's tree for this room + receiver: sub-categories and lock
+    /// states. Nil until it lands (or while the engine is away), when the
+    /// flat catalog stands in without lock states.
+    @State private var tree: GiftTreeData?
+    @State private var treeSeq = 0
     /// A refusal is a modal over the sheet, never a line inside it.
     @State private var dialog: GiftDialog?
     /// Finger-following drag on the sheet body; > 0 pulls it down.
@@ -72,7 +79,20 @@ struct LiveGiftSheet: View {
     @State private var tokens: [Int] = []
 
     private var catalog: GiftCatalogData { store.catalog }
-    private var selected: GiftData? { catalog.all.first { $0.id == selectedId } }
+
+    /// What the sheet lists: the engine tree, else the flat catalog as roots.
+    private var roots: [GiftCategoryNode] {
+        if let t = tree, !t.categories.isEmpty { return t.categories }
+        return catalog.categories.map { c in
+            GiftCategoryNode(id: c.id, title: c.title, lucky: c.lucky, gifts: c.gifts.map { GiftLeafData(gift: $0) })
+        }
+    }
+    private var leaves: [GiftLeafData] {
+        var seen = Set<Int64>()
+        return roots.flatMap(\.allGifts).filter { seen.insert($0.id).inserted }
+    }
+    private var selectedLeaf: GiftLeafData? { leaves.first { $0.id == selectedId } }
+    private var selected: GiftData? { selectedLeaf?.gift }
     private var coins: Int64 { max(0, profile.coins - pending.values.reduce(0, +)) }
     private var me: Int64 { Xani.currentUserId }
 
@@ -84,7 +104,8 @@ struct LiveGiftSheet: View {
             VStack(spacing: 0) {
                 Capsule().fill(Color.white.opacity(0.2)).frame(width: 36 * scale, height: 4 * scale).padding(.top, 10 * scale)
                 receiverRow
-                if !catalog.categories.isEmpty { categoryRow }
+                if !roots.isEmpty { categoryRow }
+                if let root = roots.first(where: { $0.id == categoryId }), !root.children.isEmpty { subRow(root) }
                 grid.frame(height: 268 * scale)
                 Spacer().frame(height: 8 * scale)
                 bottomBar
@@ -127,6 +148,8 @@ struct LiveGiftSheet: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.8), value: dialog != nil)
         .ignoresSafeArea(edges: .bottom)
         .task(id: roomId) { await loadAll() }
+        // The tree is per receiver: switching who you send to re-asks the rules.
+        .task(id: "\(roomId)/\(receiverId)/\(treeSeq)") { await loadTree() }
         .onChange(of: catalog.rev) { _ in autoSelect() }
         .onChange(of: selectedId) { _ in if let g = selected { store.warm(g) } }
         .onChange(of: profile.coins) { _ in pending.removeAll() }
@@ -147,6 +170,11 @@ struct LiveGiftSheet: View {
                     dialog = .notEnough(gift: g?.title ?? "", price: g?.coinPrice ?? 0)
                 case "too_fast":
                     dialog = .failed(message: Copy.t(.liveGiftTooFast), retry: true)
+                case let code where code.hasPrefix("gift_"):
+                    // A rule refused it: say why in the server's words and
+                    // re-read the tree so the grid shows the lock.
+                    treeSeq += 1
+                    dialog = .locked(message: f.message.isEmpty ? Copy.t(.liveGiftFailed) : f.message)
                 default:
                     dialog = .failed(message: f.message.isEmpty ? Copy.t(.liveGiftFailed) : f.message, retry: true)
                 }
@@ -174,15 +202,47 @@ struct LiveGiftSheet: View {
         _ = await peopleTask.value
     }
 
+    /// The rule-aware tree for this receiver. Engine away or offline: keep
+    /// whatever we had, or the flat catalog.
+    private func loadTree() async {
+        guard roomId != 0 else { return }
+        let r = await Xani.gifting.catalog(roomId: roomId, receiverId: receiverId)
+        guard !Task.isCancelled, r.ok, let got = r.value else { return }
+        tree = got
+        loading = false
+        autoSelect()
+        var n = 0
+        for leaf in got.all where n < 48 { n += 1; if let u = giftImageURL(leaf.gift.listingUrl) { ImageLoader.shared.prefetch(u) } }
+    }
+
+    /// Keeps a root, a sub-category and a gift selected as the lists change;
+    /// prefers a gift this sender may actually send.
     private func autoSelect() {
-        guard !catalog.categories.isEmpty else { return }
-        if !catalog.categories.contains(where: { $0.id == categoryId }) { categoryId = catalog.categories[0].id }
-        let cat = catalog.categories.first { $0.id == categoryId }!
-        if !cat.gifts.contains(where: { $0.id == selectedId }) { selectedId = cat.gifts.first?.id ?? 0 }
+        let roots = self.roots
+        guard !roots.isEmpty else { return }
+        if !roots.contains(where: { $0.id == categoryId }) { categoryId = roots[0].id; subId = 0 }
+        let root = roots.first { $0.id == categoryId }!
+        if subId != 0, !root.children.contains(where: { $0.id == subId }) { subId = 0 }
+        let visible = Self.node(in: root, sub: subId).allGifts
+        if !visible.contains(where: { $0.id == selectedId }) {
+            selectedId = visible.first { $0.state.allowed }?.id ?? visible.first?.id ?? 0
+        }
+    }
+
+    /// The open sub-category of `root`, or the root itself when none (or a stale id).
+    private static func node(in root: GiftCategoryNode, sub: Int64) -> GiftCategoryNode {
+        if sub == 0 { return root }
+        return root.children.first(where: { $0.id == sub }) ?? root
     }
 
     private func send() {
-        guard let g = selected, receiverId != 0, dialog == nil else { return }
+        guard let leaf = selectedLeaf, receiverId != 0, dialog == nil else { return }
+        let g = leaf.gift
+        if !leaf.state.allowed {
+            combo = 0
+            dialog = .locked(message: leaf.state.text.isEmpty ? Copy.t(.liveGiftLockedTitle) : leaf.state.text)
+            return
+        }
         // Refuse locally only on a balance the server has actually told us;
         // an unknown balance goes to the ledger, which is the only judge.
         if profile.balanceKnown, coins < g.coinPrice {
@@ -247,9 +307,13 @@ struct LiveGiftSheet: View {
     private var categoryRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 18 * scale) {
-                ForEach(catalog.categories) { c in
+                ForEach(roots) { c in
                     let on = c.id == categoryId
-                    Button(action: { categoryId = c.id; selectedId = c.gifts.first?.id ?? 0 }) {
+                    Button(action: {
+                        categoryId = c.id; subId = 0
+                        let g = c.allGifts
+                        selectedId = g.first { $0.state.allowed }?.id ?? g.first?.id ?? 0
+                    }) {
                         VStack(spacing: 0) {
                             AppText(c.lucky ? "🍀 " + c.title : c.title, style: Type.labelBold,
                                     color: on ? .white : Color.white.opacity(0.5), sizeOverride: 13)
@@ -265,18 +329,59 @@ struct LiveGiftSheet: View {
         .padding(.top, 6 * scale)
     }
 
+    /// Sub-categories of the open root: "All" first, then each child.
+    private func subRow(_ root: GiftCategoryNode) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8 * scale) {
+                subPill(Copy.t(.liveAll), on: subId == 0) { subId = 0 }
+                ForEach(root.children) { c in
+                    subPill(c.lucky ? "🍀 " + c.title : c.title, on: subId == c.id) {
+                        subId = c.id
+                        let g = c.allGifts
+                        if !g.contains(where: { $0.id == selectedId }) { selectedId = g.first { $0.state.allowed }?.id ?? g.first?.id ?? 0 }
+                    }
+                }
+            }
+            .padding(.horizontal, 14 * scale)
+        }
+        .padding(.top, 4 * scale)
+    }
+
+    private func subPill(_ label: String, on: Bool, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            AppText(label, style: Type.labelBold, color: on ? .white : Color.white.opacity(0.6), sizeOverride: 11)
+                .padding(.horizontal, 10 * scale).padding(.vertical, 5 * scale)
+                .background(on ? Color(rgb: 0x8B5CF6).opacity(0.35) : Color.white.opacity(0.06))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder private var grid: some View {
-        let cat = catalog.categories.first { $0.id == categoryId }
-        if loading, catalog.categories.isEmpty {
+        let root = roots.first(where: { $0.id == categoryId })
+        let node = root.map { Self.node(in: $0, sub: subId) }
+        let visible = node?.allGifts ?? []
+        if loading, roots.isEmpty {
             centered(Copy.t(.liveGiftLoading))
-        } else if cat == nil || cat!.gifts.isEmpty {
+        } else if visible.isEmpty {
             centered(Copy.t(.liveGiftEmpty))
         } else {
             ScrollView(showsIndicators: false) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6 * scale), count: 4), spacing: 6 * scale) {
-                    ForEach(cat!.gifts) { g in
-                        GiftCell(gift: g, selected: g.id == selectedId, lucky: cat!.lucky || g.lucky) {
-                            if selectedId == g.id, combo > 0 { send() } else { selectedId = g.id; combo = 0 }
+                    ForEach(visible) { leaf in
+                        let g = leaf.gift
+                        GiftCell(
+                            gift: g, selected: g.id == selectedId, lucky: (node?.lucky ?? false) || g.lucky,
+                            locked: !leaf.state.allowed, lockLabel: Copy.t(.liveGiftLocked)
+                        ) {
+                            if !leaf.state.allowed {
+                                combo = 0
+                                dialog = .locked(message: leaf.state.text.isEmpty ? Copy.t(.liveGiftLockedTitle) : leaf.state.text)
+                            } else if selectedId == g.id, combo > 0 {
+                                send()
+                            } else {
+                                selectedId = g.id; combo = 0
+                            }
                         }
                     }
                 }
@@ -331,6 +436,8 @@ struct LiveGiftSheet: View {
 enum GiftDialog: Equatable {
     case notEnough(gift: String, price: Int64)
     case failed(message: String, retry: Bool)
+    /// A rule forbids this gift for this pair; `message` is the server's reason.
+    case locked(message: String)
 }
 
 /// Centered card over the dimmed room, the way a refusal looks on any large
@@ -344,18 +451,21 @@ struct GiftModal: View {
     @Environment(\.uiScale) private var scale
 
     private var isNotEnough: Bool { if case .notEnough = dialog { return true } else { return false } }
+    private var isLocked: Bool { if case .locked = dialog { return true } else { return false } }
+
+    private var badge: LinearGradient {
+        if isNotEnough { return LinearGradient(colors: [Color(rgb: 0xFDE68A), Color(rgb: 0xF59E0B)], startPoint: .topLeading, endPoint: .bottomTrailing) }
+        if isLocked { return LinearGradient(colors: [Color(rgb: 0xC4B5FD), Color(rgb: 0x7C3AED)], startPoint: .topLeading, endPoint: .bottomTrailing) }
+        return LinearGradient(colors: [Color(rgb: 0xFCA5A5), Color(rgb: 0xEF4444)], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.5).ignoresSafeArea().onTapGesture(perform: onDismiss)
             VStack(spacing: 0) {
                 ZStack {
-                    Circle().fill(
-                        isNotEnough
-                            ? LinearGradient(colors: [Color(rgb: 0xFDE68A), Color(rgb: 0xF59E0B)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            : LinearGradient(colors: [Color(rgb: 0xFCA5A5), Color(rgb: 0xEF4444)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    AppText(isNotEnough ? "🪙" : "!", style: Type.labelBold, color: .white, sizeOverride: 24)
+                    Circle().fill(badge)
+                    AppText(isNotEnough ? "🪙" : (isLocked ? "🔒" : "!"), style: Type.labelBold, color: .white, sizeOverride: 24)
                 }
                 .frame(width: 56 * scale, height: 56 * scale)
                 Spacer().frame(height: 14 * scale)
@@ -395,6 +505,7 @@ struct GiftModal: View {
         switch dialog {
         case .notEnough: return Copy.t(.liveGiftNotEnoughTitle)
         case .failed: return Copy.t(.liveGiftFailedTitle)
+        case .locked: return Copy.t(.liveGiftLockedTitle)
         }
     }
 
@@ -408,6 +519,8 @@ struct GiftModal: View {
             ])
         case let .failed(message, _):
             return message
+        case let .locked(message):
+            return message
         }
     }
 
@@ -415,6 +528,7 @@ struct GiftModal: View {
         switch dialog {
         case .notEnough: return onRecharge
         case let .failed(_, retry): return retry ? onRetry : nil
+        case .locked: return nil
         }
     }
 }
@@ -423,6 +537,9 @@ private struct GiftCell: View {
     let gift: GiftData
     let selected: Bool
     let lucky: Bool
+    /// A rule forbids this gift for this sender → receiver: dimmed, with a lock.
+    var locked = false
+    var lockLabel = ""
     var onTap: () -> Void
     @Environment(\.uiScale) private var scale
 
@@ -434,6 +551,16 @@ private struct GiftCell: View {
                         .padding(6 * scale)
                         .aspectRatio(1, contentMode: .fit)
                     if lucky { AppText("🍀", style: Type.caption, sizeOverride: 10) }
+                    if locked {
+                        VStack {
+                            Spacer()
+                            AppText("🔒 " + lockLabel, style: Type.caption, color: .white, lineLimit: 1, sizeOverride: 9)
+                                .padding(.horizontal, 6 * scale).padding(.vertical, 2 * scale)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(RoundedRectangle(cornerRadius: 8 * scale, style: .continuous))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
                 AppText(gift.title, style: Type.caption, color: Color.white.opacity(0.9), lineLimit: 1, sizeOverride: 11)
                     .padding(.top, 4 * scale)
@@ -453,6 +580,7 @@ private struct GiftCell: View {
                             lineWidth: selected ? 1.5 : 0)
             )
             .scaleEffect(selected ? 1.06 : 1)
+            .opacity(locked ? 0.55 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: selected)
         }
         .buttonStyle(.plain)

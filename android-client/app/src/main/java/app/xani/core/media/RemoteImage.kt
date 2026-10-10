@@ -23,15 +23,16 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Remote stills for feed posters, grid thumbs and avatars.
@@ -39,13 +40,49 @@ import java.util.concurrent.ConcurrentHashMap
  * Three tiers, all keyed by URL: a bitmap LRU sized to the device heap, an
  * immutable on-disk cache (media keys are content-addressed, so a file never goes
  * stale), and the network. Concurrent requests for one URL share a single
- * download; at most six downloads run at once so a fast grid scroll cannot open
- * a hundred sockets. Nothing here touches the main thread but the final paint.
+ * download (singleflight).
+ *
+ * Two priority lanes keep the app responsive while a live stream plays:
+ * what the user can SEE ([load]) runs on four dedicated workers plus two flex
+ * workers; speculative warming ([prefetch]) runs only on the two flex workers,
+ * and the flex workers always drain visible work first. A prefetch burst can
+ * therefore never queue ahead of a visible cell, and at most two background
+ * downloads compete with a live video for bandwidth. A visible request for a
+ * URL still waiting in the prefetch lane is promoted to the visible lane.
+ * Nothing here touches the main thread but the final paint.
  */
 object ImageLoader {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val gate = Semaphore(6)
-    private val inflight = ConcurrentHashMap<String, CompletableDeferred<Bitmap?>>()
+
+    /** One keyed request: everyone waiting for this URL awaits [done]. */
+    private class Task(val url: String, val maxEdge: Int, val k: String) {
+        val done = CompletableDeferred<Bitmap?>()
+
+        /** A task can sit in both lanes after a promotion; only one run wins. */
+        val started = AtomicBoolean(false)
+    }
+
+    private val inflight = ConcurrentHashMap<String, Task>()
+    private val visibleLane = Channel<Task>(Channel.UNLIMITED)
+    private val prefetchLane = Channel<Task>(Channel.UNLIMITED)
+
+    init {
+        // Four lanes that only ever serve what is on screen…
+        repeat(4) { scope.launch { for (t in visibleLane) perform(t) } }
+        // …and two flex lanes: visible work first, prefetch when idle.
+        repeat(2) {
+            scope.launch {
+                while (true) {
+                    // select is biased to its first clause, which is the priority.
+                    val t = select<Task> {
+                        visibleLane.onReceive { it }
+                        prefetchLane.onReceive { it }
+                    }
+                    perform(t)
+                }
+            }
+        }
+    }
 
     @Volatile
     private var dir: File? = null
@@ -66,38 +103,48 @@ object ImageLoader {
 
     fun cached(url: String, maxEdge: Int): Bitmap? = synchronized(mem) { mem.get(key(url, maxEdge)) }
 
-    /** Warms memory + disk for a URL the user is about to see (next feed page). */
+    /** Warms memory + disk for a URL the user is about to see. Never delays a visible load. */
     fun prefetch(url: String, maxEdge: Int) {
         if (url.isEmpty() || cached(url, maxEdge) != null) return
-        scope.launch { load(url, maxEdge) }
+        val t = Task(url, maxEdge, key(url, maxEdge))
+        if (inflight.putIfAbsent(t.k, t) == null) prefetchLane.trySend(t)
     }
 
+    /** Resolves a URL the user is looking at right now. */
     suspend fun load(url: String, maxEdge: Int): Bitmap? {
         if (url.isEmpty()) return null
-        val k = key(url, maxEdge)
         cached(url, maxEdge)?.let { return it }
-        // Singleflight: the first caller owns the download, later ones await it.
-        val mine = CompletableDeferred<Bitmap?>()
+        val k = key(url, maxEdge)
+        val mine = Task(url, maxEdge, k)
         val prior = inflight.putIfAbsent(k, mine)
-        if (prior != null) return prior.await()
-        scope.launch {
-            val bmp = runFeature<Bitmap?>(null) { fetch(url, maxEdge) }
-            inflight.remove(k)
-            mine.complete(bmp)
+        if (prior != null) {
+            // Already queued or downloading. If it is still waiting in the
+            // prefetch lane, bump it to the visible lane; the started flag
+            // turns the leftover queue entry into a no-op.
+            if (!prior.started.get()) visibleLane.trySend(prior)
+            return prior.done.await()
         }
-        return mine.await()
+        visibleLane.trySend(mine)
+        return mine.done.await()
     }
 
-    private suspend fun fetch(url: String, maxEdge: Int): Bitmap? = gate.withPermit {
+    private suspend fun perform(t: Task) {
+        if (!t.started.compareAndSet(false, true)) return // promoted duplicate
+        val bmp = runFeature<Bitmap?>(null) { fetch(t.url, t.maxEdge) }
+        inflight.remove(t.k)
+        t.done.complete(bmp)
+    }
+
+    private fun fetch(url: String, maxEdge: Int): Bitmap? {
         val file = diskFile(url)
         val bytes = if (file != null && file.length() > 0) {
             file.readBytes()
         } else {
             download(url)?.also { data -> file?.let { writeAtomic(it, data) } }
-        } ?: return@withPermit null
-        val bmp = decode(bytes, maxEdge) ?: return@withPermit null
+        } ?: return null
+        val bmp = decode(bytes, maxEdge) ?: return null
         synchronized(mem) { mem.put(key(url, maxEdge), bmp) }
-        bmp
+        return bmp
     }
 
     private fun download(url: String): ByteArray? {
@@ -167,8 +214,11 @@ fun RemoteImage(
     }
     val bmp = bitmap
     if (bmp != null) {
+        // Remembered so scroll/drag recompositions reuse the painter instead of
+        // re-wrapping the bitmap every frame.
+        val painter = remember(bmp) { BitmapPainter(bmp.asImageBitmap()) }
         Image(
-            painter = BitmapPainter(bmp.asImageBitmap()),
+            painter = painter,
             contentDescription = null,
             modifier = modifier,
             contentScale = contentScale,

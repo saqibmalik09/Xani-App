@@ -44,6 +44,8 @@ type AuthState = {
   session: Session | null
   appName: string
   mediaBase: string
+  /** Public site for shared join/profile links (branding Website URL or APP_WEB_URL). */
+  webBaseUrl: string
   login: (identifier: string, password: string) => Promise<{ ok: true } | { ok: false; message: string }>
   logout: () => Promise<void>
   refreshMe: () => Promise<void>
@@ -122,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [name, setName] = useState(appName())
   const [mediaBase, setMediaBase] = useState('')
+  const [webBaseUrl, setWebBaseUrl] = useState('')
 
   const install = useCallback((s: Session) => {
     setSession(s)
@@ -153,11 +156,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const cfg = await api<{
       app_name?: string
       media_base_url?: string
+      web_base_url?: string
       favicon_key?: string
     }>('GET', '/v1/config', { auth: false })
     if (!cfg.ok) return
     if (cfg.data.app_name) setName(cfg.data.app_name)
     if (cfg.data.media_base_url) setMediaBase(cfg.data.media_base_url.replace(/\/$/, ''))
+    if (typeof cfg.data.web_base_url === 'string') setWebBaseUrl(cfg.data.web_base_url.replace(/\/$/, ''))
     const fav = cfg.data.favicon_key
     if (fav && cfg.data.media_base_url) {
       const href = mediaUrl(cfg.data.media_base_url.replace(/\/$/, ''), fav)
@@ -242,6 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       appName: name,
       mediaBase,
+      webBaseUrl,
       login,
       logout,
       refreshMe,
@@ -253,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active,
       setActiveMembership,
     }),
-    [ready, session, name, mediaBase, login, logout, refreshMe, refreshConfig, can, canAny, canPlatform, active, setActiveMembership],
+    [ready, session, name, mediaBase, webBaseUrl, login, logout, refreshMe, refreshConfig, can, canAny, canPlatform, active, setActiveMembership],
   )
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>

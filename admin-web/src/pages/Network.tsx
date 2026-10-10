@@ -22,7 +22,7 @@ import { Chain, Select, StatusPill } from '../ui/Org'
 
 /** The signed-in person's own place in the organisation: roles, codes, upline, downline, requests. */
 export function NetworkPage() {
-  const { session, can, active, setActiveMembership } = useAuth()
+  const { session, can, active, setActiveMembership, webBaseUrl } = useAuth()
   const [memberships, setMemberships] = useState<Membership[] | null>(null)
   const [codes, setCodes] = useState<ReferralCodeView[]>([])
   const [requests, setRequests] = useState<RequestView[]>([])
@@ -113,7 +113,7 @@ export function NetworkPage() {
             ) : null}
           </Card>
 
-          <ReferralCodes codes={codes} />
+          <ReferralCodes codes={codes} webBaseUrl={webBaseUrl} />
 
           <JoinWithCode
             onDone={(v) => {
@@ -207,16 +207,25 @@ function MyRequestRow({ r, onChanged, onError }: { r: RequestView; onChanged: (v
   )
 }
 
-function ReferralCodes({ codes }: { codes: ReferralCodeView[] }) {
+function ReferralCodes({ codes, webBaseUrl }: { codes: ReferralCodeView[]; webBaseUrl: string }) {
   const [copied, setCopied] = useState('')
-  const copy = async (code: string) => {
+  const flash = (key: string) => {
+    setCopied(key)
+    window.setTimeout(() => setCopied(''), 1500)
+  }
+  const write = async (text: string, key: string) => {
     try {
-      await navigator.clipboard.writeText(code)
-      setCopied(code)
-      window.setTimeout(() => setCopied(''), 1500)
+      await navigator.clipboard.writeText(text)
+      flash(key)
     } catch {
-      window.prompt('Copy your code:', code)
+      window.prompt('Copy:', text)
     }
+  }
+  const joinUrl = (code: string, roleSlug: string, fromApi?: string) => {
+    if (fromApi) return fromApi
+    const base = webBaseUrl.replace(/\/$/, '')
+    if (!base) return ''
+    return `${base}/join/${encodeURIComponent(code)}/${encodeURIComponent(roleSlug)}`
   }
   return (
     <Card title="My referral codes">
@@ -226,21 +235,82 @@ function ReferralCodes({ codes }: { codes: ReferralCodeView[] }) {
         </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {codes.map((c) => (
-            <div key={c.code} className="role-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="role-row-title" style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', letterSpacing: 1 }}>{c.code}</div>
-                <div className="role-row-meta">
-                  As {c.role.title} · people who redeem it apply for{' '}
-                  {c.target_roles.length ? c.target_roles.map((t) => t.title).join(', ') : 'nothing yet (no child roles set)'} and land under you after
-                  your approval.
+          {codes.map((c) => {
+            const links =
+              c.join_links && c.join_links.length > 0
+                ? c.join_links
+                : (c.target_roles || []).map((t) => ({
+                    role: t,
+                    url: joinUrl(c.code, t.slug),
+                  }))
+            return (
+              <div
+                key={c.code}
+                className="role-row"
+                style={{ cursor: 'default', alignItems: 'flex-start', flexDirection: 'column', gap: 8 }}
+              >
+                <div style={{ width: '100%', display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      className="role-row-title"
+                      style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', letterSpacing: 1 }}
+                    >
+                      {c.code}
+                    </div>
+                    <div className="role-row-meta">As {c.role.title} · copy the code or share a role invite link.</div>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => void write(c.code, `code:${c.code}`)}>
+                    {copied === `code:${c.code}` ? 'Copied' : 'Copy code'}
+                  </Button>
                 </div>
+                {links.length === 0 ? (
+                  <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                    No recruitable roles on this code yet.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+                    {links.map((l) => {
+                      const url = l.url || joinUrl(c.code, l.role.slug)
+                      const key = `link:${c.code}:${l.role.slug}`
+                      return (
+                        <div
+                          key={l.role.slug}
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600 }}>{l.role.title}</div>
+                            {url ? (
+                              <div className="muted" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                                {url}
+                              </div>
+                            ) : (
+                              <div className="muted" style={{ fontSize: 12 }}>
+                                Set Website URL under Settings → Branding to generate invite links.
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={!url}
+                            onClick={() => void write(url, key)}
+                          >
+                            {copied === key ? 'Copied' : 'Copy link'}
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-              <Button size="sm" variant="secondary" onClick={() => void copy(c.code)}>
-                {copied === c.code ? 'Copied' : 'Copy'}
-              </Button>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </Card>

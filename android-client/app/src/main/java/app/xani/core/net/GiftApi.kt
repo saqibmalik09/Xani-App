@@ -1,6 +1,7 @@
 package app.xani.core.net
 
 import androidx.compose.runtime.Immutable
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -94,12 +95,26 @@ data class LiveGiftEvent(
     val gift: GiftData,
     val sender: LivePersonData,
     val receiver: LivePersonData,
+    /**
+     * Everyone a multi-select send landed on (more than one only). [receiver]
+     * stays the first of them, so single-receiver code keeps working; the
+     * room plays ONE animation for the whole bundle.
+     */
+    val receivers: List<LivePersonData> = emptyList(),
     val count: Int,
     val combo: Int,
     val totalCoins: Long,
     /** The room's running gift total after this one. */
     val roomCoins: Long,
+    /** Diamonds credited to receivers in this room so far — the 💎 pill. */
+    val roomDiamonds: Long = 0L,
     val atMs: Long,
+    /** Receiver's diamonds today after this gift (engine frames); 0 on legacy / optimistic frames. */
+    val receiverTodayDiamonds: Long = 0L,
+    /** Coins this receiver has been given in this live so far (engine frames). */
+    val receiverLiveCoins: Long = 0L,
+    /** Coins the sender got back on this gift, when a rule pays cashback. */
+    val cashbackCoins: Long = 0L,
 ) {
     companion object {
         fun from(json: JSONObject) = LiveGiftEvent(
@@ -109,11 +124,16 @@ data class LiveGiftEvent(
             gift = json.obj("gift")?.let(GiftData::from) ?: GiftData.Empty,
             sender = LivePersonData.from(json.obj("sender") ?: JSONObject()),
             receiver = LivePersonData.from(json.obj("receiver") ?: JSONObject()),
+            receivers = json.objects("receivers").map(LivePersonData::from),
             count = json.int("count", 1),
             combo = json.int("combo", 1),
             totalCoins = json.long("total_coins"),
             roomCoins = json.long("room_coins"),
+            roomDiamonds = json.long("room_diamonds"),
             atMs = json.long("at_ms"),
+            receiverTodayDiamonds = json.long("receiver_today_diamonds"),
+            receiverLiveCoins = json.long("receiver_live_coins"),
+            cashbackCoins = json.long("cashback_coins"),
         )
     }
 }
@@ -129,7 +149,19 @@ data class LiveEnterEvent(
     /** The entrance asset; key or absolute URL, resolved like avatars. */
     val entranceUrl: String,
     val entranceMime: String,
+    /** How long the effect holds the screen; 0 = the app's default (5 s). */
+    val durationMs: Int = 0,
+    /** Optional sound (mp3/wav/aac/ogg) played to the room while it shows. */
+    val soundUrl: String = "",
+    val soundMime: String = "",
     val atMs: Long,
+    /**
+     * When THIS device parsed the frame (local clock). The overlay keeps a
+     * short replay buffer so an entrance that lands mid-join still plays once
+     * the screen is up — this stamp is what stops a stale replay from
+     * resurrecting an old entrance minutes later.
+     */
+    val receivedAtMs: Long = 0L,
 ) {
     companion object {
         fun from(json: JSONObject) = LiveEnterEvent(
@@ -137,7 +169,38 @@ data class LiveEnterEvent(
             user = LivePersonData.from(json.obj("user") ?: JSONObject()),
             entranceUrl = json.str("entrance_url"),
             entranceMime = json.str("entrance_mime"),
+            durationMs = json.int("duration_ms"),
+            soundUrl = json.str("sound_url"),
+            soundMime = json.str("sound_mime"),
             atMs = json.long("at_ms"),
+            receivedAtMs = System.currentTimeMillis(),
+        )
+    }
+}
+
+/**
+ * A player's game win, announced to every open room: a short centered strip
+ * with the winner's name and badges. The winner's own device drops it — their
+ * game already showed the win.
+ */
+@Immutable
+data class LiveGameWinEvent(
+    val roomId: Long,
+    val user: LivePersonData,
+    val amount: Long,
+    val game: String,
+    val atMs: Long,
+    /** When THIS device parsed the frame; a stale replay never resurfaces. */
+    val receivedAtMs: Long = 0L,
+) {
+    companion object {
+        fun from(json: JSONObject) = LiveGameWinEvent(
+            roomId = json.id("room_id"),
+            user = LivePersonData.from(json.obj("user") ?: JSONObject()),
+            amount = json.long("amount"),
+            game = json.str("game"),
+            atMs = json.long("at_ms"),
+            receivedAtMs = System.currentTimeMillis(),
         )
     }
 }
@@ -235,6 +298,10 @@ class GiftApi internal constructor(private val api: ApiClient) {
      * Sends [count] of gift [giftId] to [receiverId] (0 = host). [clientId] is the
      * idempotency key: a retry lands the same gift once and debits once.
      * 409 `insufficient_funds` when the sender cannot cover it.
+     *
+     * [receiverIds] (more than one) is the sheet's multi-select: every id gets
+     * its own copy — its own ledger row, its own split — and the sender pays
+     * price × count × size. The server answers with one frame for the bundle.
      */
     suspend fun send(
         roomId: Long,
@@ -243,12 +310,14 @@ class GiftApi internal constructor(private val api: ApiClient) {
         clientId: String,
         count: Int = 1,
         combo: Int = 1,
+        receiverIds: List<Long> = emptyList(),
     ): ApiResponse<SendGiftData> =
         api.post(
             "/v1/live/rooms/$roomId/gifts",
             jsonOf(
                 "gift_id" to giftId.toString(),
                 "receiver_id" to receiverId.toString(),
+                "receiver_ids" to if (receiverIds.size > 1) JSONArray(receiverIds.map { it.toString() }) else null,
                 "count" to count,
                 "combo" to combo,
                 "client_id" to clientId,

@@ -253,6 +253,23 @@ data class AppConfig(
     val maxCaption: Int = 2200,
     /** Relative media key for the product favicon (Settings → Branding). */
     val faviconKey: String = "",
+    /** Relative media key for the product logo: splash, sign-in, notifications. */
+    val logoKey: String = "",
+    /** Picture shown for an account that has not set one (Settings → Branding). */
+    val defaultAvatarKey: String = "",
+    /**
+     * OAuth web client the Google sign-in sheet asks for a token for. Set from
+     * the dashboard, so moving to another Google project is not a release.
+     */
+    val googleWebClientId: String = "",
+    /** Splash line under the wordmark; empty = none. */
+    val tagline: String = "",
+    /**
+     * How long a handle is locked after a change (Settings → Profile). Stated
+     * before the user picks, on signup and on edit profile, so it has to be the
+     * same window the server enforces.
+     */
+    val usernameChangeDays: Int = 30,
     /**
      * Public Firebase web SDK config from Settings → Firebase. Apps use it to
      * initialise Messaging without shipping `google-services.json`.
@@ -273,6 +290,11 @@ data class AppConfig(
             maxImageMb = json.int("media_max_image_mb", 25),
             maxCaption = json.int("media_max_caption", 2200),
             faviconKey = json.str("favicon_key"),
+            logoKey = json.str("logo_key"),
+            defaultAvatarKey = json.str("default_avatar_key"),
+            googleWebClientId = json.str("google_web_client_id"),
+            tagline = json.str("tagline"),
+            usernameChangeDays = json.int("username_change_days", 30),
             firebaseWeb = json.obj("firebase_web")?.let(FirebaseWebConfig::from),
         )
     }
