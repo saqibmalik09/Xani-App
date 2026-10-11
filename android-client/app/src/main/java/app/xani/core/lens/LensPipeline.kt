@@ -421,7 +421,7 @@ internal class LensPipeline(
             motion = max(motion, hypot(dx, dy))
             faceVel[t.id] = floatArrayOf((dx / dtA).coerceIn(-1.5f, 1.5f), (dy / dtA).coerceIn(-1.5f, 1.5f))
         }
-        faceLead = min(dtA * 0.6f, 0.09f)
+        faceLead = min(dtA * 0.7f, 0.12f)
         targetFaces = a.faces
         val seg = a.seg ?: return
         if (a.segW <= 0 || a.segH <= 0 || seg.size < a.segW * a.segH) return
@@ -462,7 +462,7 @@ internal class LensPipeline(
     /**
      * One step of the render-rate smoother: each shown face eases toward the
      * latest measurement extrapolated by its velocity over [faceLead]. The
-     * time constant falls from 120 ms at rest (steady, no jitter) to ~25 ms
+     * time constant falls from 90 ms at rest (steady, no jitter) to ~20 ms
      * under motion (visually instant), so the art never floats behind a turn.
      */
     private fun advanceFaces() {
@@ -480,7 +480,7 @@ internal class LensPipeline(
             val aim = if (v != null) t.shift(v[0] * faceLead, v[1] * faceLead) else t
             val p = prev[t.id] ?: return@map aim
             val d = hypot(aim.cx - p.cx, aim.cy - p.cy)
-            val tau = 0.12f - 0.095f * min(1f, d * 16f)
+            val tau = 0.09f - 0.07f * min(1f, d * 16f)
             p.lerp(aim, 1f - exp(-dt / tau))
         }
         shownFaces = faces

@@ -625,6 +625,8 @@ class Copy(private val lang: String) {
         const val Create15s = "create.15s"
         const val CreateCover = "create.cover"
         const val CreateCoverHint = "create.cover_hint"
+        const val CreateLivePreview = "create.live_preview"
+        const val CreateLiveCamAsk = "create.live_cam_ask"
         const val CreateLiveHint = "create.live_hint"
         const val CreateVideo = "create.video"
         const val CreateAudioOnly = "create.audio_only"
@@ -1855,6 +1857,8 @@ private val En = mapOf(
     Copy.Create15s to "15s",
     Copy.CreateCover to "Cover image",
     Copy.CreateCoverHint to "Select and preview a cover",
+    Copy.CreateLivePreview to "Camera & beauty",
+    Copy.CreateLiveCamAsk to "Tap to allow camera access",
     Copy.CreateLiveHint to "Weekend coding session & Q&A",
     Copy.CreateVideo to "Video",
     Copy.CreateAudioOnly to "Audio",

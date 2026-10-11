@@ -287,6 +287,14 @@ object LiveSession {
      */
     private val mainVideo = HashSet<Long>()
     private val pkVideo = HashSet<Long>()
+    /**
+     * Whose voice the PK watch room is playing. The arena's HLS fallback asks
+     * before unmuting: the CDN copy of the opponent runs seconds behind the
+     * SFU audio, and both at once is the "voice is wrong in PK" report.
+     */
+    private val pkAudio = HashSet<Long>()
+    /** Result card folded by hand: (fight id, round) that must stay closed. */
+    private var pkDismissed: Pair<Long, Int>? = null
     /** Holds the arena open after the opponent left, then folds it away. */
     private var pkLeftHold: Job? = null
     private var hold: Job? = null
@@ -673,7 +681,15 @@ object LiveSession {
                             val pk = runFeature(null) { PkData.from(data) }
                             // Only a battle this room is a side of; a frame for
                             // another room (stale stream) cannot repaint ours.
-                            if (pk != null && pk.id != 0L && (pk.left.roomId == roomId || pk.right.roomId == roomId)) {
+                            // A result card this host folded away stays folded:
+                            // late frames for the same finished round (the
+                            // opponent's rematch vote) must not reopen the
+                            // arena. A new round fighting again always does.
+                            val folded = pkDismissed?.let { (id, round) ->
+                                pk != null && pk.id == id && pk.round == round && !pk.fighting
+                            } == true
+                            if (pk != null && pk.id != 0L && !folded && (pk.left.roomId == roomId || pk.right.roomId == roomId)) {
+                                if (pk.fighting) pkDismissed = null
                                 pkLeftHold?.cancel(); pkLeftHold = null
                                 update { it.copy(pk = pk) }
                                 // Everyone in the room watches the other half
@@ -1074,6 +1090,7 @@ object LiveSession {
             if (mine != session) return@launch
             val data = r.value
             if (r.ok && data != null) {
+                pkDismissed = null
                 update { it.copy(pk = data.pk, pkInvite = null) }
                 openPkWatch(_state.value?.roomId ?: 0L)
             } else if (!r.ok) {
@@ -1115,6 +1132,22 @@ object LiveSession {
             val r = Xani.calls.pkRematch(ui.roomId, durationSec)
             if (!r.ok) _notices.tryEmit(LiveNotice(r.code.ifBlank { "failed" }, r.message))
         }
+    }
+
+    /**
+     * The host said no to a rematch: fold the result card away and give the
+     * broadcast its full frame back now, instead of sitting through the
+     * result window. Local only — the server's window runs out on its own,
+     * and the frame guard keeps this round's late frames (the opponent's
+     * rematch vote, a score replay) from reopening the arena.
+     */
+    fun dismissPkResult() {
+        val ui = _state.value ?: return
+        val pk = ui.pk ?: return
+        if (!pk.showingResult) return
+        pkDismissed = pk.id to pk.round
+        closePkRoom()
+        update { it.copy(pk = null) }
     }
 
     /**
@@ -1163,6 +1196,13 @@ object LiveSession {
                             if (present) pkVideo += userId else pkVideo -= userId
                             update { it.copy(mediaRev = it.mediaRev + 1) }
                         }
+                        // Their voice landing (or going) re-keys the arena the
+                        // same way, so the HLS fallback mutes the moment the
+                        // live audio takes over instead of doubling it.
+                        override fun onRemoteAudio(userId: Long, present: Boolean): Unit = post(mine) {
+                            val changed = if (present) pkAudio.add(userId) else pkAudio.remove(userId)
+                            if (changed) update { it.copy(mediaRev = it.mediaRev + 1) }
+                        }
                     },
                     secondary = true,
                 )
@@ -1185,6 +1225,9 @@ object LiveSession {
             else -> null
         }
     }
+
+    /** True while the PK watch room is playing [userId]'s live voice. */
+    fun pkAudioLive(userId: Long): Boolean = userId in pkAudio
 
     /**
      * The opponent closed their live. Keep the arena on screen on a local
@@ -1210,6 +1253,7 @@ object LiveSession {
         pkRoom?.let { runFeature(Unit) { it.close() } }
         pkRoom = null
         pkVideo.clear()
+        pkAudio.clear()
     }
 
     /** How long the arena stays up saying the opponent left. */
@@ -1483,6 +1527,7 @@ object LiveSession {
                 }
             }
             is CallEvent.LivePkStart -> if (ui.role == LiveRole.Host) {
+                pkDismissed = null
                 update { it.copy(pk = e.start.pk, pkInvite = null) }
                 openPkWatch(ui.roomId)
             }

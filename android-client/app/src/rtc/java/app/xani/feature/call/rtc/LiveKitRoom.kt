@@ -63,7 +63,12 @@ internal class LiveKitRoom(
     private val publish: Boolean,
     private val listener: RtcRoom.Listener,
     hardwareH264: Boolean,
-    /** A second room beside a live one: do not touch device audio routing. */
+    /**
+     * A second room beside a live one: do not touch device audio routing.
+     * Plain media playback, no AudioSwitch handler — the SDK default is a
+     * phone call, and a second call handler fights the primary room's and
+     * resets the audio mode when this room closes mid-broadcast.
+     */
     secondary: Boolean = false,
 ) : RtcRoom {
     /**
@@ -79,7 +84,11 @@ internal class LiveKitRoom(
     private val room: Room = LiveKit.create(
         app,
         options(DeviceClass.read(app), publish, hardwareH264),
-        overrides = if (secondary) LiveKitOverrides() else LiveKitOverrides(audioOptions = audioOptions(app, publish)),
+        overrides = if (secondary) {
+            LiveKitOverrides(audioOptions = AudioOptions(audioOutputType = AudioType.MediaAudioType()))
+        } else {
+            LiveKitOverrides(audioOptions = audioOptions(app, publish))
+        },
     )
     private val remoteTracks = HashMap<Long, VideoTrack>()
     private val views = HashMap<Long, TextureViewRenderer>()
@@ -114,9 +123,13 @@ internal class LiveKitRoom(
             }
             listener.onLink(RtcLink.Connected)
             publishParticipants()
-            // Tracks that were already flowing before we subscribed to events.
+            // Tracks that were already flowing before we subscribed to events
+            // — the viewer who walks into a fight that is already on.
             room.remoteParticipants.values.forEach { p ->
                 val id = p.userId() ?: return@forEach
+                if (p.getTrackPublication(Track.Source.MICROPHONE)?.track is AudioTrack) {
+                    listener.onRemoteAudio(id, true)
+                }
                 val t = p.getTrackPublication(Track.Source.CAMERA)?.track as? VideoTrack ?: return@forEach
                 attach(id, t)
             }
@@ -225,6 +238,7 @@ internal class LiveKitRoom(
                 // background, host re-published) must land silent too.
                 (e.track as? AudioTrack)?.let { a ->
                     if (playbackMuted) runFeature(Unit) { a.rtcTrack.setEnabled(false) }
+                    e.participant.userId()?.let { listener.onRemoteAudio(it, true) }
                 }
                 val id = e.participant.userId() ?: return
                 val t = e.track as? VideoTrack ?: return
@@ -232,6 +246,7 @@ internal class LiveKitRoom(
             }
             is RoomEvent.TrackUnsubscribed -> {
                 val id = e.participant.userId() ?: return
+                if (e.track is AudioTrack) listener.onRemoteAudio(id, false)
                 if (e.track is VideoTrack) {
                     remoteTracks.remove(id)?.let { t -> views[id]?.let { runFeature(Unit) { t.removeRenderer(it) } } }
                     listener.onRemoteVideo(id, false)

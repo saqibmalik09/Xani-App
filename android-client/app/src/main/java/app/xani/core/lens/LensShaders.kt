@@ -302,10 +302,15 @@ void main() {
         float region = uFaceCount > 0 ? faceMask(uv) : 0.7;
         float skin = region * skinProb(src);
         vec3 hp = src - sm;
+        // Smooth the blotch, keep the pore: the bilateral kills mid-scale
+        // unevenness, and adding a slice of the fine high-pass back on top is
+        // what separates "clear skin" from the waxy all-blur look.
         col = mix(src, sm, min(1.0, uSmoothAmt * 1.18) * skin);
-        col += hp * (0.15 * uSmoothAmt * skin);
-        col += hp * uSharpen * 1.5 * (1.0 - skin);
-        col = mix(col, pow(max(col, vec3(0.0)), vec3(1.0 - 0.36 * uWhiten)), skin);
+        col += hp * (0.26 * uSmoothAmt * skin);
+        // Clarity: full strength off-skin (hair, eyes, lashes), half on skin —
+        // features stay crisp without resurrecting what was just smoothed.
+        col += hp * uSharpen * (1.5 * (1.0 - skin) + 0.55 * skin);
+        col = mix(col, pow(max(col, vec3(0.0)), vec3(1.0 - 0.40 * uWhiten)), skin);
         float lum = dot(col, LUMA);
         col += skin * uGlow * 0.14 * smoothstep(0.42, 0.92, lum) * vec3(1.0, 0.93, 0.86);
     }

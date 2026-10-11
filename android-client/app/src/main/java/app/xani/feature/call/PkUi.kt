@@ -639,7 +639,11 @@ private fun RemoteHalf(side: PkSideData, userId: Long, mediaRev: Int, copy: Copy
     when {
         remote != null -> VideoSurface(remote, Modifier.fillMaxSize())
         side.hlsUrl.isNotBlank() -> {
-            HlsPlayerView(side.hlsUrl, Modifier.fillMaxSize())
+            // The watch room may already be playing their voice: the CDN copy
+            // of the same person runs seconds behind it, and both at once is
+            // an echo. The picture stays — it is only the sharper SFU track
+            // that has not landed yet — but exactly one of them gets to talk.
+            HlsPlayerView(side.hlsUrl, Modifier.fillMaxSize(), muted = LiveSession.pkAudioLive(userId))
             // Keep asking briefly for the sharper SFU track behind the HLS.
             if (retry < PkRemoteRetries) {
                 LaunchedEffect(userId, mediaRev, retry) {
@@ -703,56 +707,83 @@ private fun PkResultOverlay(
         else -> copy.t(Copy.PkLose)
     }
     val iVoted = if (pk.left.host.id == mine.host.id) pk.rematchLeft else pk.rematchRight
-    Column(
+    Box(
         modifier
             .clip(RoundedCornerShape(rdp(20)))
             .background(Color(0xF0171230))
-            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(rdp(20)))
-            .padding(horizontal = rdp(22), vertical = rdp(16)),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(rdp(20))),
     ) {
-        XaniText(if (draw) "🤝" else if (iWon) "🏆" else "⚔", Type.Label, fontSizeOverride = 28f)
-        XaniText(
-            title,
-            Type.LabelBold,
-            color = if (iWon) PkGold else Color.White,
-            fontSizeOverride = 20f,
-            modifier = Modifier.padding(top = rdp(4)),
-        )
-        XaniText(
-            "${formatCoins(mine.score)}  ·  ${formatCoins(opp.score)}",
-            Type.LabelBold,
-            color = Color.White.copy(alpha = 0.8f),
-            fontSizeOverride = 12f,
-            modifier = Modifier.padding(top = rdp(4)),
-        )
-        XaniText(
-            copy.t(Copy.PkResultHold, "s" to "$remain"),
-            Type.Caption,
-            color = Color.White.copy(alpha = 0.55f),
-            fontSizeOverride = 12f,
-            modifier = Modifier.padding(top = rdp(4)),
-        )
+        // No to a rematch: the cross in the corner folds the card and the
+        // arena away and gives the broadcast its full frame back now, instead
+        // of leaving Rematch as the only thing on the card to press.
         if (isHost) {
-            Spacer(Modifier.height(rdp(12)))
             Box(
                 Modifier
-                    .fillMaxWidth()
-                    .height(rdp(42))
-                    .clip(RoundedCornerShape(rdp(21)))
-                    .then(
-                        if (iVoted) Modifier.background(Color.White.copy(alpha = 0.12f))
-                        else Modifier.background(Brush.linearGradient(listOf(PkPurple, PkPink))),
-                    )
-                    .pressable(enabled = !iVoted, pressedScale = 0.95f, onClick = { LiveSession.rematchPk(pk.durationSec) }),
+                    .align(Alignment.TopEnd)
+                    .padding(rdp(8))
+                    .size(rdp(26))
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.12f))
+                    .pressable(pressedScale = 0.88f, onClick = { LiveSession.dismissPkResult() }),
                 contentAlignment = Alignment.Center,
             ) {
-                XaniText(
-                    if (iVoted) copy.t(Copy.PkRematchWait) else copy.t(Copy.PkRematch),
-                    Type.LabelBold,
-                    color = Color.White,
-                    fontSizeOverride = 14f,
+                VectorCanvas(
+                    shapes = listOf(
+                        VShape.Line(17f, 7f, 7f, 17f, stroke(Color.White, 2.2f)),
+                        VShape.Line(7f, 7f, 17f, 17f, stroke(Color.White, 2.2f)),
+                    ),
+                    viewport = 24f,
+                    modifier = Modifier.size(rdp(11)),
                 )
+            }
+        }
+        Column(
+            Modifier.padding(horizontal = rdp(22), vertical = rdp(16)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            XaniText(if (draw) "🤝" else if (iWon) "🏆" else "⚔", Type.Label, fontSizeOverride = 28f)
+            XaniText(
+                title,
+                Type.LabelBold,
+                color = if (iWon) PkGold else Color.White,
+                fontSizeOverride = 20f,
+                modifier = Modifier.padding(top = rdp(4)),
+            )
+            XaniText(
+                "${formatCoins(mine.score)}  ·  ${formatCoins(opp.score)}",
+                Type.LabelBold,
+                color = Color.White.copy(alpha = 0.8f),
+                fontSizeOverride = 12f,
+                modifier = Modifier.padding(top = rdp(4)),
+            )
+            XaniText(
+                copy.t(Copy.PkResultHold, "s" to "$remain"),
+                Type.Caption,
+                color = Color.White.copy(alpha = 0.55f),
+                fontSizeOverride = 12f,
+                modifier = Modifier.padding(top = rdp(4)),
+            )
+            if (isHost) {
+                Spacer(Modifier.height(rdp(12)))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(rdp(42))
+                        .clip(RoundedCornerShape(rdp(21)))
+                        .then(
+                            if (iVoted) Modifier.background(Color.White.copy(alpha = 0.12f))
+                            else Modifier.background(Brush.linearGradient(listOf(PkPurple, PkPink))),
+                        )
+                        .pressable(enabled = !iVoted, pressedScale = 0.95f, onClick = { LiveSession.rematchPk(pk.durationSec) }),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    XaniText(
+                        if (iVoted) copy.t(Copy.PkRematchWait) else copy.t(Copy.PkRematch),
+                        Type.LabelBold,
+                        color = Color.White,
+                        fontSizeOverride = 14f,
+                    )
+                }
             }
         }
     }

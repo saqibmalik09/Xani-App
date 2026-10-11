@@ -136,9 +136,13 @@ data class LensCaps(
     val analyzeEvery: Int,
 ) {
     companion object {
+        // analyzeEvery leans on the analyzer's one-round-in-flight guard: a
+        // frame offered while ML is still chewing is simply skipped, so "every
+        // frame" self-throttles to what the chip can do — and a fast chip gets
+        // the freshest tracking instead of a fixed stale cadence.
         fun forDevice(tier: DeviceClass): LensCaps = when (tier) {
-            DeviceClass.Low -> LensCaps(background = false, masks = true, workLongEdge = 640, analyzeEvery = 3)
-            DeviceClass.Mid -> LensCaps(background = true, masks = true, workLongEdge = 960, analyzeEvery = 2)
+            DeviceClass.Low -> LensCaps(background = false, masks = true, workLongEdge = 640, analyzeEvery = 2)
+            DeviceClass.Mid -> LensCaps(background = true, masks = true, workLongEdge = 960, analyzeEvery = 1)
             DeviceClass.High -> LensCaps(background = true, masks = true, workLongEdge = 1280, analyzeEvery = 1)
         }
     }
@@ -163,10 +167,14 @@ class LensController(initial: LensState = LensState()) {
 
     fun setBackground(bg: Background) = update { it.copy(background = if (caps.background || bg.isNone) bg else it.background) }
 
+    /**
+     * One mask at a time, like every live app's tray: tapping a mask replaces
+     * the one being worn, tapping the worn one takes it off. Stacked ears +
+     * glasses + crown read as a glitch, not a feature.
+     */
     fun toggleMask(id: String) = update { s ->
         if (!caps.masks || LensCatalog.mask(id) == null) return@update s
-        val next = if (id in s.masks) s.masks - id else (s.masks + id).takeLast(MaxMasks)
-        s.copy(masks = next)
+        s.copy(masks = if (id in s.masks) emptyList() else listOf(id))
     }
 
     fun clearMasks() = update { it.copy(masks = emptyList()) }
@@ -179,10 +187,6 @@ class LensController(initial: LensState = LensState()) {
             val next = f(cur)
             if (cur == next || _state.compareAndSet(cur, next)) return
         }
-    }
-
-    companion object {
-        const val MaxMasks = 3
     }
 }
 
@@ -203,14 +207,20 @@ object LensCatalog {
 
     data class BeautyPreset(val id: String, val name: String, val beauty: Beauty, val glyph: String)
 
+    // No preset moves geometry (eyes / slim stay 0): a warped jaw or bulged
+    // eye on a moving face is the single loudest "cheap filter" tell, and the
+    // ask is clear, smooth, bright skin — not a different face. The Beauty
+    // fields stay for server packs that want them deliberately.
     val beauty: List<BeautyPreset> = listOf(
         BeautyPreset("b.off", "Off", Beauty.Off, "○"),
-        BeautyPreset("b.soft", "Soft", Beauty(smooth = 0.48f, sharpen = 0.14f), "✦"),
-        BeautyPreset("b.natural", "Natural", Beauty(smooth = 0.62f, whiten = 0.18f, sharpen = 0.22f, eyes = 0.07f, glow = 0.12f), "✧"),
-        BeautyPreset("b.glow", "Glow", Beauty(smooth = 0.72f, whiten = 0.32f, sharpen = 0.26f, glow = 0.55f, eyes = 0.1f), "✨"),
-        BeautyPreset("b.glam", "Glam", Beauty(smooth = 0.86f, whiten = 0.4f, sharpen = 0.3f, eyes = 0.16f, slim = 0.16f, glow = 0.42f), "💄"),
-        BeautyPreset("b.porcelain", "Porcelain", Beauty(smooth = 0.94f, whiten = 0.52f, sharpen = 0.34f, eyes = 0.18f, slim = 0.2f, glow = 0.55f), "🤍"),
-        BeautyPreset("b.sculpt", "Sculpt", Beauty(smooth = 0.52f, sharpen = 0.38f, eyes = 0.22f, slim = 0.28f, glow = 0.1f), "🪞"),
+        // The one-tap answer: strong clean-up, real texture kept, bright skin.
+        BeautyPreset("b.auto", "Auto", Beauty(smooth = 0.60f, whiten = 0.26f, sharpen = 0.34f, glow = 0.16f), "🪄"),
+        BeautyPreset("b.soft", "Soft", Beauty(smooth = 0.48f, sharpen = 0.16f), "✦"),
+        BeautyPreset("b.natural", "Natural", Beauty(smooth = 0.62f, whiten = 0.18f, sharpen = 0.24f, glow = 0.12f), "✧"),
+        BeautyPreset("b.glow", "Glow", Beauty(smooth = 0.70f, whiten = 0.32f, sharpen = 0.28f, glow = 0.50f), "✨"),
+        BeautyPreset("b.glam", "Glam", Beauty(smooth = 0.80f, whiten = 0.40f, sharpen = 0.32f, glow = 0.40f), "💄"),
+        BeautyPreset("b.porcelain", "Porcelain", Beauty(smooth = 0.88f, whiten = 0.50f, sharpen = 0.36f, glow = 0.48f), "🤍"),
+        BeautyPreset("b.sculpt", "Sculpt", Beauty(smooth = 0.50f, whiten = 0.12f, sharpen = 0.52f, glow = 0.08f), "🪞"),
     )
 
     val looks: List<Look> = listOf(
@@ -261,31 +271,35 @@ object LensCatalog {
         Background.Gradient("bg.snow", 0xFFE2E8F0.toInt(), 0xFFF8FAFC.toInt()),
     )
 
+    // Widths sized to the face, not over it: glasses ≈ 2.1× the inter-eye
+    // distance (real frames are barely wider than the temples), headwear a
+    // touch more. The earlier catalogue ran ~25% larger and read as the art
+    // swallowing the face.
     val masks: List<Mask> = listOf(
-        Mask("m.shades", "Shades", listOf(MaskLayer(LensStickers.Sunglasses, MaskLayer.Anchor.EyesMid, 2.7f, 0.42f)), "🕶️"),
-        Mask("m.hearts", "Heart Eyes", listOf(MaskLayer(LensStickers.HeartGlasses, MaskLayer.Anchor.EyesMid, 2.9f, 0.5f)), "😍"),
-        Mask("m.neon", "Neon", listOf(MaskLayer(LensStickers.NeonGlasses, MaskLayer.Anchor.EyesMid, 2.8f, 0.42f)), "🟦"),
+        Mask("m.shades", "Shades", listOf(MaskLayer(LensStickers.Sunglasses, MaskLayer.Anchor.EyesMid, 2.15f, 0.42f)), "🕶️"),
+        Mask("m.hearts", "Heart Eyes", listOf(MaskLayer(LensStickers.HeartGlasses, MaskLayer.Anchor.EyesMid, 2.3f, 0.5f)), "😍"),
+        Mask("m.neon", "Neon", listOf(MaskLayer(LensStickers.NeonGlasses, MaskLayer.Anchor.EyesMid, 2.2f, 0.42f)), "🟦"),
         Mask("m.cat", "Kitty", listOf(
-            MaskLayer(LensStickers.CatEars, MaskLayer.Anchor.Forehead, 3.0f, 0.5f, up = 0.75f),
-            MaskLayer(LensStickers.CatNose, MaskLayer.Anchor.NoseTip, 1.6f, 0.55f, up = -0.1f),
+            MaskLayer(LensStickers.CatEars, MaskLayer.Anchor.Forehead, 2.4f, 0.5f, up = 0.7f),
+            MaskLayer(LensStickers.CatNose, MaskLayer.Anchor.NoseTip, 1.25f, 0.55f, up = -0.1f),
         ), "🐱"),
         Mask("m.puppy", "Puppy", listOf(
-            MaskLayer(LensStickers.DogEars, MaskLayer.Anchor.Forehead, 3.4f, 0.62f, up = 0.35f),
-            MaskLayer(LensStickers.DogNose, MaskLayer.Anchor.NoseTip, 1.2f, 0.72f, up = -0.05f),
+            MaskLayer(LensStickers.DogEars, MaskLayer.Anchor.Forehead, 2.7f, 0.62f, up = 0.35f),
+            MaskLayer(LensStickers.DogNose, MaskLayer.Anchor.NoseTip, 0.95f, 0.72f, up = -0.05f),
         ), "🐶"),
-        Mask("m.bunny", "Bunny", listOf(MaskLayer(LensStickers.BunnyEars, MaskLayer.Anchor.Forehead, 2.4f, 1.1f, up = 1.35f)), "🐰"),
-        Mask("m.crown", "Crown", listOf(MaskLayer(LensStickers.Crown, MaskLayer.Anchor.Forehead, 2.5f, 0.62f, up = 0.9f)), "👑"),
-        Mask("m.flowers", "Flower Crown", listOf(MaskLayer(LensStickers.FlowerCrown, MaskLayer.Anchor.Forehead, 3.2f, 0.4f, up = 0.6f)), "🌸"),
-        Mask("m.devil", "Devil", listOf(MaskLayer(LensStickers.DevilHorns, MaskLayer.Anchor.Forehead, 2.6f, 0.6f, up = 0.95f)), "😈"),
-        Mask("m.stache", "Moustache", listOf(MaskLayer(LensStickers.Moustache, MaskLayer.Anchor.Mouth, 1.9f, 0.42f, up = 0.28f)), "🥸"),
-        Mask("m.blush", "Blush", listOf(MaskLayer(LensStickers.Blush, MaskLayer.Anchor.NoseTip, 3.1f, 0.34f, up = -0.05f)), "☺️"),
-        Mask("m.freckles", "Freckles", listOf(MaskLayer(LensStickers.Freckles, MaskLayer.Anchor.NoseTip, 2.6f, 0.4f, up = 0.1f)), "🙂"),
-        Mask("m.stars", "Star Eyes", listOf(MaskLayer(LensStickers.StarGlasses, MaskLayer.Anchor.EyesMid, 2.8f, 0.48f)), "⭐"),
-        Mask("m.angel", "Angel", listOf(MaskLayer(LensStickers.Halo, MaskLayer.Anchor.Forehead, 2.4f, 0.45f, up = 1.1f)), "😇"),
-        Mask("m.sparkle", "Sparkle", listOf(MaskLayer(LensStickers.Sparkle, MaskLayer.Anchor.EyesMid, 3.4f, 0.7f, up = 0.15f)), "✨"),
-        Mask("m.wings", "Wings", listOf(MaskLayer(LensStickers.Wings, MaskLayer.Anchor.Forehead, 4.2f, 0.7f, up = 0.2f)), "🪽"),
-        Mask("m.bow", "Bow", listOf(MaskLayer(LensStickers.Bow, MaskLayer.Anchor.Forehead, 1.6f, 0.85f, up = 1.05f)), "🎀"),
-        Mask("m.tears", "Tears", listOf(MaskLayer(LensStickers.Tears, MaskLayer.Anchor.EyesMid, 2.6f, 0.7f, up = -0.35f)), "😢"),
+        Mask("m.bunny", "Bunny", listOf(MaskLayer(LensStickers.BunnyEars, MaskLayer.Anchor.Forehead, 1.9f, 1.1f, up = 1.2f)), "🐰"),
+        Mask("m.crown", "Crown", listOf(MaskLayer(LensStickers.Crown, MaskLayer.Anchor.Forehead, 2.0f, 0.62f, up = 0.85f)), "👑"),
+        Mask("m.flowers", "Flower Crown", listOf(MaskLayer(LensStickers.FlowerCrown, MaskLayer.Anchor.Forehead, 2.55f, 0.4f, up = 0.55f)), "🌸"),
+        Mask("m.devil", "Devil", listOf(MaskLayer(LensStickers.DevilHorns, MaskLayer.Anchor.Forehead, 2.1f, 0.6f, up = 0.9f)), "😈"),
+        Mask("m.stache", "Moustache", listOf(MaskLayer(LensStickers.Moustache, MaskLayer.Anchor.Mouth, 1.5f, 0.42f, up = 0.28f)), "🥸"),
+        Mask("m.blush", "Blush", listOf(MaskLayer(LensStickers.Blush, MaskLayer.Anchor.NoseTip, 2.5f, 0.34f, up = -0.05f)), "☺️"),
+        Mask("m.freckles", "Freckles", listOf(MaskLayer(LensStickers.Freckles, MaskLayer.Anchor.NoseTip, 2.1f, 0.4f, up = 0.1f)), "🙂"),
+        Mask("m.stars", "Star Eyes", listOf(MaskLayer(LensStickers.StarGlasses, MaskLayer.Anchor.EyesMid, 2.2f, 0.48f)), "⭐"),
+        Mask("m.angel", "Angel", listOf(MaskLayer(LensStickers.Halo, MaskLayer.Anchor.Forehead, 1.9f, 0.45f, up = 1.05f)), "😇"),
+        Mask("m.sparkle", "Sparkle", listOf(MaskLayer(LensStickers.Sparkle, MaskLayer.Anchor.EyesMid, 2.7f, 0.7f, up = 0.15f)), "✨"),
+        Mask("m.wings", "Wings", listOf(MaskLayer(LensStickers.Wings, MaskLayer.Anchor.Forehead, 3.4f, 0.7f, up = 0.2f)), "🪽"),
+        Mask("m.bow", "Bow", listOf(MaskLayer(LensStickers.Bow, MaskLayer.Anchor.Forehead, 1.3f, 0.85f, up = 1.0f)), "🎀"),
+        Mask("m.tears", "Tears", listOf(MaskLayer(LensStickers.Tears, MaskLayer.Anchor.EyesMid, 2.1f, 0.7f, up = -0.3f)), "😢"),
     )
 
     private val lookIndex = looks.associateBy { it.id }

@@ -68,6 +68,14 @@ interface RtcRoom {
         fun onRemoteVideo(userId: Long, present: Boolean)
 
         /**
+         * The remote side's voice started (or stopped) playing from this
+         * room. The PK arena uses it to silence the opponent's HLS fallback:
+         * the CDN copy of the same person runs seconds behind the SFU track,
+         * and both talking at once is the "voice is wrong in PK" report.
+         */
+        fun onRemoteAudio(userId: Long, present: Boolean) = Unit
+
+        /**
          * Our own camera track was published or replaced. The host's renderer
          * only exists once that track does, and for a broadcast with no remote
          * publishers nothing else fires afterwards — without this the host
@@ -101,10 +109,11 @@ interface RtcEngine {
      * seat: no capture, no mic permission needed.
      *
      * `secondary` is a second room on a device that already has one — the PK
-     * watch seat. It leaves device audio routing alone: the primary room chose
-     * the mode (call audio with echo cancellation for a publisher), and a
-     * second room resetting that to media playback would take the host's AEC
-     * away mid-broadcast.
+     * watch seat. It must leave device audio routing alone: the primary room
+     * chose the mode (call audio with echo cancellation for a publisher), so
+     * the second room plays its sound as plain media and never installs its
+     * own routing handler — two handlers fighting over the audio mode, and the
+     * loser's reset on close, is broken voice for the rest of the broadcast.
      */
     fun joinRoom(
         url: String,

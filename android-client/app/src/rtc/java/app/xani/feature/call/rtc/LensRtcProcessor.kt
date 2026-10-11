@@ -58,10 +58,12 @@ internal class LensRtcProcessor(
         @Volatile var busy = false
     }
 
-    // Four, not three: the encoder and the host's renderer hold a slot each at
-    // the same time, and a pool that runs dry drops the frame back to raw —
-    // visible as the filter flickering off.
-    private val pool = Array(4) { Slot() }
+    // Six: the encoder and the host's renderer hold a slot each at the same
+    // time, and a brief encoder stall (thermal dip mid-broadcast) holds a few
+    // more. A pool that runs dry costs a frame — dropped under a replaced
+    // background, raw fallback otherwise — so the margin is cheap insurance
+    // (~2 MB a slot at the working size).
+    private val pool = Array(6) { Slot() }
 
     init {
         controller.caps = caps
@@ -85,12 +87,20 @@ internal class LensRtcProcessor(
     override fun onCapturerStopped() = Unit
 
     override fun onFrameCaptured(frame: VideoFrame) {
-        val out = runFeature(null) { process(frame) } ?: frame
+        val out = runFeature(null) { process(frame) }
+        // Raw fallback keeps a live from going black when the pipeline cannot
+        // serve a frame — but not when a replaced background is on: the raw
+        // frame is the host's real room, and one of them flashing through the
+        // virtual background every time the pool runs dry is both the
+        // "background glitches after a while" report and a privacy leak.
+        // Dropping a single frame at 30 fps is invisible; the room is not.
+        if (out == null && !controller.value.background.isNone) return
+        val send = out ?: frame
         // Encoder first: the wire must not wait on a local renderer, and a
         // renderer that throws must not cost viewers a frame.
-        sink?.onFrame(out)
-        for (m in mirrors) runFeature(Unit) { m.onFrame(out) }
-        if (out !== frame) out.release()
+        sink?.onFrame(send)
+        for (m in mirrors) runFeature(Unit) { m.onFrame(send) }
+        if (send !== frame) send.release()
     }
 
     /**
@@ -141,7 +151,14 @@ internal class LensRtcProcessor(
         val dst = slot.target ?: return null
         dst.bind()
         if (work == 0) pipe.blitSource(src) else pipe.blit2D(work)
-        GLES30.glFlush()
+        // Finish, not flush: the encoder and the self-view read this texture
+        // from their own GL contexts on other threads. A flush only queues
+        // the work — minutes into a broadcast, with the chip hot and the
+        // effect chain at its longest (segmented background), the read can
+        // land before the write completes and torn half-rendered frames
+        // glitch through the replaced background. Finishing pins the cost
+        // here on the capture thread, single-digit ms at the working size.
+        GLES30.glFinish()
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         slot.busy = true
         val wrapped = TextureBufferImpl(

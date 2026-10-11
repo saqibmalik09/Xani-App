@@ -1,5 +1,6 @@
 package app.xani.feature.create
 
+import android.Manifest
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,6 +47,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,9 +62,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.xani.core.lens.Beauty
+import app.xani.core.lens.Lens
+import app.xani.core.lens.LensCatalog
+import app.xani.core.lens.LensTray
+import app.xani.core.lens.lensTrayScrim
 import app.xani.core.net.RewardEligibility
 import app.xani.core.net.StageData
 import app.xani.feature.call.rememberCallPermissions
+import app.xani.feature.inbox.CameraPreview
 import app.xani.i18n.Copy
 import app.xani.ui.components.XaniText
 import app.xani.ui.components.pressable
@@ -216,6 +224,11 @@ internal fun CreateLiveFlow(
                 canGoVideo = canGoVideo,
                 canNextAudio = canNextAudio,
                 rewards = rewards,
+                front = frontCam,
+                // Off the moment the room page takes over: the broadcast bridge
+                // preview is about to open the same sensor, and two clients on
+                // one camera evict each other in a loop.
+                previewOn = active && step == 0,
                 onClose = onPost,
                 onFlipCam = { frontCam = !frontCam },
                 onGoLive = { permissions(true) { step = 2 } },
@@ -248,6 +261,8 @@ private fun LiveSetupForm(
     canGoVideo: Boolean,
     canNextAudio: Boolean,
     rewards: RewardEligibility?,
+    front: Boolean,
+    previewOn: Boolean,
     onClose: () -> Unit,
     onFlipCam: () -> Unit,
     onGoLive: () -> Unit,
@@ -576,6 +591,16 @@ private fun LiveSetupForm(
                         )
                     }
                 }
+
+                // See yourself before anyone else does: the live camera with
+                // the same Lens controller the broadcast publishes through, so
+                // the beauty (Auto one tap away), look or background dialled in
+                // here is exactly the first frame viewers get. Go LIVE itself
+                // is untouched — it starts the room with whatever is on screen.
+                if (isVideo) {
+                    SectionLabel(copy.t(Copy.CreateLivePreview))
+                    LiveSetupPreview(copy = copy, front = front, enabled = previewOn)
+                }
                 Spacer(Modifier.height(rdp(72)))
             }
 
@@ -613,6 +638,86 @@ private fun LiveSetupForm(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The viewfinder before Go Live: a rounded card with the camera through
+ * [Lens.live] and the full effect tray riding the picture's lower edge,
+ * Beauty category first so Auto is one tap away. Until the host has chosen
+ * anything, Auto is the starting point — a host expects to look finished
+ * before being seen, and Off stays one tap away. Camera permission is asked
+ * here (it was previously asked at Go LIVE; answering now means the room
+ * opens without a dialog in the way).
+ */
+@Composable
+private fun LiveSetupPreview(copy: Copy, front: Boolean, enabled: Boolean) {
+    val context = LocalContext.current
+    var camOk by remember {
+        mutableStateOf(
+            context.checkSelfPermission(Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { camOk = it }
+    LaunchedEffect(enabled) {
+        if (enabled && !camOk) ask.launch(Manifest.permission.CAMERA)
+    }
+    // One write, only while nothing was chosen; a host's own pick (including
+    // Off) is never overridden, and the room resets the controller on end.
+    LaunchedEffect(Unit) {
+        if (Lens.live.value.beauty == Beauty.Off) {
+            LensCatalog.beautyPreset("b.auto")?.let { Lens.live.setBeauty(it.beauty) }
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(rdp(340))
+            .clip(RoundedCornerShape(rdp(18)))
+            .border(rdp(1.5f), CreateTokens.LiveAccent.copy(alpha = 0.15f), RoundedCornerShape(rdp(18)))
+            .background(Color(0xFF0B0818)),
+    ) {
+        if (camOk) {
+            CameraPreview(
+                modifier = Modifier.fillMaxSize(),
+                front = front,
+                enabled = enabled,
+                fallback = Color(0xFF0B0818),
+                lens = Lens.live,
+            )
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .pressable { ask.launch(Manifest.permission.CAMERA) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                XaniText("📷", Type.Label, fontSizeOverride = 30f)
+                XaniText(
+                    copy.t(Copy.CreateLiveCamAsk),
+                    Type.Caption,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSizeOverride = 13f,
+                    modifier = Modifier.padding(top = rdp(8)),
+                )
+            }
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(lensTrayScrim())
+                .padding(top = rdp(14), bottom = rdp(10)),
+        ) {
+            LensTray(
+                controller = Lens.live,
+                copy = copy,
+                compact = true,
+                initial = LensCatalog.Category.Beauty,
+            )
         }
     }
 }

@@ -6,6 +6,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -18,8 +19,11 @@ import app.xani.core.isolate.runFeature
  * which is what a live playlist wants — there is no position to resume.
  */
 @Composable
-fun HlsPlayerView(url: String, modifier: Modifier = Modifier, onState: (playing: Boolean) -> Unit = {}) {
+fun HlsPlayerView(url: String, modifier: Modifier = Modifier, muted: Boolean = false, onState: (playing: Boolean) -> Unit = {}) {
     val player = remember(url) { HlsPlayer(url, onState) }
+    // Applied on every pass, not just creation: the PK arena mutes this
+    // fallback the moment the live SFU audio of the same person takes over.
+    SideEffect { player.setMuted(muted) }
     DisposableEffect(player) { onDispose { player.release() } }
     AndroidView(
         factory = { ctx ->
@@ -40,6 +44,13 @@ private class HlsPlayer(private val url: String, private val onState: (Boolean) 
     private var holder: SurfaceHolder? = null
     private var released = false
     private var retries = 0
+    private var muted = false
+
+    fun setMuted(m: Boolean) {
+        if (muted == m) return
+        muted = m
+        mp?.let { p -> runFeature(Unit) { p.setVolume(if (m) 0f else 1f, if (m) 0f else 1f) } }
+    }
 
     fun attach(h: SurfaceHolder) {
         holder = h
@@ -66,6 +77,7 @@ private class HlsPlayer(private val url: String, private val onState: (Boolean) 
                     AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build(),
                 )
                 setDisplay(h)
+                if (muted) setVolume(0f, 0f)
                 setDataSource(url)
                 setOnPreparedListener { it.start(); retries = 0; onState(true) }
                 setOnInfoListener { _, what, _ ->
