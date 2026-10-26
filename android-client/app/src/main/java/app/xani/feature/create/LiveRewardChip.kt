@@ -77,7 +77,7 @@ internal fun RewardEligibilityChip(copy: Copy, el: RewardEligibility?) {
         )
         el.campaigns.all { it.complete } -> Color(0xFF16A34A) to copy.t(Copy.RewardsEligibleDone)
         else -> {
-            val bad = el.campaigns.firstOrNull { !it.eligible }
+            val bad = whyNotCampaign(el)
             Color(0xFFD97706) to copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)
         }
     }
@@ -107,7 +107,13 @@ internal fun RewardEligibilityChip(copy: Copy, el: RewardEligibility?) {
 internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long): String? {
     el ?: return null
     if (!el.enabled) return null
-    val next = el.next ?: return null
+    val next = el.next ?: run {
+        faceBlockedHudText(copy, el, verifiedMs)?.let { return it }
+        // Nothing to earn right now: say why (cap reached, level not unlocked,
+        // group off, …) instead of going silent — the host asked the screen.
+        val bad = whyNotCampaign(el) ?: return null
+        return copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)
+    }
     val amt = "${next.nextAmount} ${next.nextAsset}"
     // Progress is measured on the server's period total, not this session:
     // remaining = next threshold − verified so far in the period, advanced
@@ -116,6 +122,44 @@ internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long)
     val remaining = (next.remainingMs - gained).coerceAtLeast(0L)
     return if (remaining == 0L) copy.t(Copy.RewardsHudEarned, "amt" to amt)
     else copy.t(Copy.RewardsHudNext, "amt" to amt, "t" to fmtCountdown(remaining))
+}
+
+/**
+ * The ineligible campaign this user actually belongs to. Campaigns are
+ * independent (a Star host and a Host/Agency account can each run their own),
+ * so when several are ineligible the one worth explaining is the one whose
+ * role the user holds — only a progress rule (time, gifts, qualifying days)
+ * is holding them back, not USER_ROLE/LIVE_ROLE. A role mismatch on every
+ * campaign (account truly has no eligible role anywhere) falls back to the
+ * first, same as before.
+ */
+private fun whyNotCampaign(el: RewardEligibility): RewardCampaignStatus? {
+    val bad = el.campaigns.filter { !it.eligible }
+    return bad.firstOrNull { c ->
+        c.reason != "USER_ROLE" &&
+            c.conditions.none { !it.pass && (it.type == "USER_ROLE" || it.type == "LIVE_ROLE") }
+    } ?: bad.firstOrNull()
+}
+
+/** The campaign is held back only by the FACE_VERIFIED rule (server reason or the failed leaf). */
+private fun RewardCampaignStatus.blockedByFace(): Boolean =
+    !eligible && (reason == "FACE_NOT_VERIFIED" || conditions.any { !it.pass && it.type == "FACE_VERIFIED" })
+
+/**
+ * HUD line when nothing is eligible because the face is not verified:
+ * before the level is reached, a warning that rewards will not be added;
+ * once the time is complete (or the server already blocked the reached
+ * hour), "Face not verified · {amt} not added". Null when face is not the
+ * reason, so every other case keeps its current (empty) HUD.
+ */
+private fun faceBlockedHudText(copy: Copy, el: RewardEligibility, verifiedMs: Long): String? {
+    val c = el.campaigns.filter { it.blockedByFace() }.minByOrNull { it.remainingMs } ?: return null
+    val amt = "${c.nextAmount} ${c.nextAsset}"
+    val gained = (verifiedMs - c.verifiedMs).coerceAtLeast(0L)
+    val reached = c.pending.any { it.reason == "FACE_NOT_VERIFIED" } ||
+        (c.nextThresholdMs > 0L && c.remainingMs - gained <= 0L)
+    return if (reached && c.nextAmount > 0L) copy.t(Copy.RewardsHudFaceNotAdded, "amt" to amt)
+    else copy.t(Copy.RewardsHudFaceNeeded)
 }
 
 /**
@@ -181,15 +225,32 @@ private fun notEligibleWhy(copy: Copy, c: RewardCampaignStatus?): String {
     c ?: return copy.t(Copy.RewardsNotEligibleNone)
     val failed = c.conditions.firstOrNull { !it.pass }
     if (failed != null) {
+        if (failed.type == "FACE_VERIFIED") return copy.t(Copy.RewardsNotEligibleFace)
         return copy.t(Copy.RewardsNotEligibleNeed, "which" to failedConditionWhich(failed))
     }
     return when (c.reason) {
         "ROLE_NOT_ALLOWED", "MODE_NOT_ALLOWED" -> copy.t(Copy.RewardsNotEligibleRole)
+        "FACE_NOT_VERIFIED" -> copy.t(Copy.RewardsNotEligibleFace)
         "USER_ROLE" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "platform role")
         "TIME_NOT_REACHED" -> copy.t(Copy.RewardsNotEligibleTime, "t" to fmtShort(c.remainingMs.coerceAtLeast(0L)))
-        "MAX_TOTAL", "MAX_PER_DAY", "MAX_PER_WEEK", "MAX_PER_MONTH", "MIN_INTERVAL" -> copy.t(Copy.RewardsNotEligibleLimit)
+        "MAX_TOTAL", "MAX_PER_DAY", "MAX_PER_WEEK", "MAX_PER_MONTH", "MIN_INTERVAL",
+        "TIER_MAX_HOURS", "LEVEL_MAX_TOTAL", "LEVEL_MAX_PER_DAY", "LEVEL_MAX_PER_WEEK", "LEVEL_MAX_PER_MONTH",
+        -> copy.t(Copy.RewardsNotEligibleLimit)
+        // Gift-level ladder: no tier reached yet / the paying group is off.
+        "RATE_NOT_UNLOCKED" -> copy.t(Copy.RewardsNotEligibleUnlock)
+        "LADDER_OFF" -> copy.t(Copy.RewardsNotEligibleOff)
+        "MIN_SESSION_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "a longer single live session")
+        "ACCOUNT_AGE" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "account age")
+        "GIFT_VALUE_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "more gift value received")
+        "GIFT_COUNT_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "more gifts received")
+        "UNIQUE_GIFTERS_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "more different gifters")
+        "SENT_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "more gifts sent")
+        "QUALIFIED_DAYS_NOT_MET" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "more qualifying days")
+        "LEVEL_SCHEDULE" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "a scheduled day for this level")
+        "LEVEL_PREVIOUS_UNPAID" -> copy.t(Copy.RewardsNotEligibleNeed, "which" to "the previous level first")
         "POLICY_DISABLED", "" -> copy.t(Copy.RewardsNotEligibleNone)
-        else -> copy.t(Copy.RewardsNotEligibleCondition)
+        // Never a mystery: an unmapped code still names itself.
+        else -> copy.t(Copy.RewardsNotEligibleNeed, "which" to c.reason.lowercase().replace('_', ' '))
     }
 }
 
@@ -203,6 +264,7 @@ private fun failedConditionWhich(c: RewardCondition): String {
         "LIVE_MODE" -> "live type"
         "SESSION_TIME" -> "session live time"
         "ACCOUNT_AGE" -> "account age (days)"
+        "FACE_VERIFIED" -> "face verification"
         "RECEIVED_GIFT_VALUE" -> "gift value received"
         "RECEIVED_GIFT_COUNT" -> "gifts received"
         "UNIQUE_GIFTERS" -> "different gifters"
