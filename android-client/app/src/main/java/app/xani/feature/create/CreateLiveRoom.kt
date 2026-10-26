@@ -246,8 +246,8 @@ internal fun CreateLiveRoom(
     // reward lands and every minute), the countdown beside the clock derived
     // from the same verified figure the clock shows, and the landing toast.
     val onAir = !over && (live?.roomId ?: 0L) > 0L
-    val rewardSnap = rememberRewardEligibility(isVideo = config.isVideo, live = onAir)
-    val rewardLine = if (onAir) rewardHudText(copy, rewardSnap.el, elapsed * 1000L, rewardSnap.msSinceFetch) else null
+    val rewardEl = rememberRewardEligibility(isVideo = config.isVideo, live = onAir)
+    val rewardLine = if (onAir) rewardHudText(copy, rewardEl, elapsed * 1000L) else null
     val rewardToast = rememberRewardToasts(live = onAir)
 
     BackHandler(enabled = peopleSheet || giftSheet || stickerSheet || coHostSheet || seatsSheet || pkSheet || toolsMenu || exitSheet || stagePerson != null || composing || lensOpen) {
