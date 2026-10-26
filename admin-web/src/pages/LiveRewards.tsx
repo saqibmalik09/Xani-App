@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { del, get, post, put } from '../lib/api'
 import { Button } from '../ui/Button'
@@ -125,6 +125,55 @@ type CampaignStatus = {
   delivery: string
   conditions?: LeafState[]
   pending?: { threshold_ms: number; status: string; reason?: string; reached_at: string; next_eval_at?: string; deadline?: string }[]
+  // Gift-level ladder (repeating rewards with levels by diamonds received —
+  // what the host is credited; the sender pays coins).
+  ladder?: LadderStatus | null
+  computed_at?: string
+  revision?: number
+  stale?: boolean
+}
+
+/** The host's position on a gift-level ladder, as the server computed it. */
+type LadderStatus = {
+  tier_key?: string
+  tier_name?: string
+  tier_kind?: string
+  rate: number
+  asset?: string
+  received_diamonds: number
+  next_tier_name?: string
+  next_tier_min?: number
+  next_tier_rate?: number
+  remaining_diamonds: number
+  hours_paid_today: number
+  cap_hours_today: number
+  today_total: number
+  new_host: boolean
+  new_host_days_left?: number
+  unlocked: boolean
+  // Milestone: the ladder prices ONE fixed-level payout per period, not each hour.
+  milestone?: boolean
+  // Group switches, flippable on the active version from the campaign page.
+  weekly_on?: boolean
+  new_host_on?: boolean
+  tiers: { key: string; name: string; kind: string; min_received: number; new_host_days?: number; amount: number; amount_cohost?: number | null; asset: string; max_hours_per_day: number; current: boolean; reached: boolean }[]
+}
+
+/** Roster / search column: the stored snapshot headline for one campaign. */
+type LevelBrief = {
+  campaign_id: string
+  campaign: string
+  period_key: string
+  eligible: boolean
+  reason?: string
+  next_amount: number
+  next_asset?: string
+  remaining_ms: number
+  rewards_in_period: number
+  ladder?: LadderStatus | null
+  computed_at: string
+  revision: number
+  stale?: boolean
 }
 
 type Explain = {
@@ -189,6 +238,7 @@ const REASON_TEXT: Record<string, string> = {
   QUALIFIED_DAYS_NOT_MET: 'Not enough qualifying days yet',
   ACCOUNT_AGE: 'Account is too new',
   USER_ROLE: 'User does not hold a required platform role',
+  FACE_NOT_VERIFIED: 'Face not verified — the reward is not added until the account’s face verification is approved',
   CONDITION_FAILED: 'A condition is not met',
   MAX_TOTAL: 'Reached the maximum rewards for this period',
   MAX_PER_DAY: 'Reached the daily maximum',
@@ -205,7 +255,28 @@ const REASON_TEXT: Record<string, string> = {
   WALLET_FAILED: 'Wallet write failed (will retry)',
   DUPLICATE_PREVENTED: 'Already paid for this level',
   TIME_RESET: 'Cleared by an operator time reset',
+  RATE_NOT_UNLOCKED: 'No gift level reached yet — this hour waits until the first level’s diamonds are received',
+  LADDER_OFF: 'The level group that would pay this hour is switched off — it waits and resumes when the switch is turned back on',
+  TIER_MAX_HOURS: 'Today’s paid hours for this level are used up — more hours pay again tomorrow',
 }
+
+/** Finding kinds → what an operator reads (the Checks card and the Findings page). */
+const FINDING_TEXT: Record<string, string> = {
+  TIME_PASS_NO_THRESHOLD: 'Live time was reached but no reward row exists (missing hour)',
+  ELIGIBLE_NOT_ISSUED: 'Eligible but never added',
+  LATE_ISSUE: 'Added late',
+  LEDGER_NO_WALLET: 'Reward recorded but the wallet entry is missing',
+  WALLET_NO_LEDGER: 'Wallet entry without a reward record',
+  AMOUNT_MISMATCH: 'Paid amount differs from the level’s rate (wrongly paid)',
+  WRONG_TIER: 'Paid at a different gift level than the rules give for the recorded diamonds (wrongly paid)',
+  OVER_LIMIT: 'More paid hours on one day than the level allows (wrongly paid)',
+  PERIOD_MISMATCH: 'Reward recorded under the wrong week / period',
+  PROGRESS_MISMATCH: 'Progress shown to the host disagreed with a fresh check',
+  STUCK_PENDING: 'Pending past its deadline',
+  STUCK_OUTBOX: 'Notification not delivered',
+  DUPLICATE_PREVENTED: 'A duplicate payout was prevented',
+}
+const findingText = (kind: string) => FINDING_TEXT[kind] || kind.replaceAll('_', ' ').toLowerCase()
 const reasonText = (code?: string) => (code ? REASON_TEXT[code] || code.replaceAll('_', ' ').toLowerCase() : '')
 
 const COND_NAME: Record<string, string> = {
@@ -214,6 +285,7 @@ const COND_NAME: Record<string, string> = {
   LIVE_MODE: 'Live type',
   USER_ROLE: 'Platform role',
   ACCOUNT_AGE: 'Account age (days)',
+  FACE_VERIFIED: 'Face verification',
   RECEIVED_GIFT_VALUE: 'Gift value received',
   RECEIVED_GIFT_COUNT: 'Gifts received',
   UNIQUE_GIFTERS: 'Different gifters',
@@ -227,6 +299,7 @@ const condValue = (type: string, v: unknown): string => {
   if (Array.isArray(v)) return v.map((x) => condValue(type, x)).join(', ')
   if (v === null || v === undefined || v === '') return '—'
   if (type === 'SESSION_TIME' && typeof v === 'number') return fmtMs(v, { seconds: false })
+  if (type === 'FACE_VERIFIED') return v === true || v === 'true' ? 'verified' : 'not verified'
   return String(v)
 }
 
@@ -269,7 +342,7 @@ type TimeReset = {
   revoked_by: string | null
   revoked_at: string | null
 }
-type UserResp = { user: Hit | null; explain: Explain; summary: Summary; time: Record<string, unknown> | null; resets?: TimeReset[] }
+type UserResp = { user: Hit | null; explain: Explain; summary: Summary; time: Record<string, unknown> | null; resets?: TimeReset[]; checks?: Finding[]; history_days?: number }
 
 type DayGroup = { day: string; label: string; live_ms: number; audio_ms: number; video_ms: number; totals: Record<string, number>; rewards: LedgerView[] }
 
@@ -404,6 +477,7 @@ export function LiveRewardsPage() {
       <Route index element={<RewardsHome />} />
       <Route path="payouts" element={<RewardsPayouts />} />
       <Route path="payouts/:id" element={<RewardDetailPage />} />
+      <Route path="time" element={<TimeAndPayouts />} />
       <Route path="stats" element={<RewardsStats />} />
       <Route path="users/:id" element={<RewardsUser />} />
       <Route path="findings" element={<RewardsFindings />} />
@@ -417,6 +491,7 @@ function SectionNav() {
   const items = [
     ['/live-rewards', 'Health'],
     ['/live-rewards/payouts', 'Payouts'],
+    ['/live-rewards/time', 'Time & payouts'],
     ['/live-rewards/stats', 'Daily · Weekly · Monthly'],
     ['/live-rewards/campaigns', 'Campaigns'],
     ['/live-rewards/findings', 'Findings'],
@@ -485,10 +560,44 @@ export function EngineBanner() {
   )
 }
 
+/**
+ * Roster / search column: current level and rate, diamonds to the next level,
+ * paid hours today — from the stored snapshot, one line per active campaign.
+ */
+function LevelCell({ levels }: { levels?: LevelBrief[] }) {
+  if (!levels || levels.length === 0) return <span className="muted">—</span>
+  return (
+    <>
+      {levels.map((b) => {
+        const l = b.ladder
+        return (
+          <div key={b.campaign_id} style={{ marginBottom: 2 }}>
+            {levels.length > 1 ? <span className="muted">{b.campaign} · </span> : null}
+            {l ? (
+              <>
+                <strong>{l.unlocked ? l.tier_name : 'no level'}</strong>
+                {l.unlocked ? ` ${l.rate.toLocaleString()}${l.milestone ? ' once' : '/h'}` : ''}
+                {l.milestone ? null : l.cap_hours_today ? <span className="muted"> · {l.hours_paid_today}/{l.cap_hours_today} h today</span> : l.hours_paid_today ? <span className="muted"> · {l.hours_paid_today} h today</span> : null}
+                {l.next_tier_name ? <div className="muted">{l.remaining_diamonds.toLocaleString()} diamonds → {l.next_tier_name}</div> : <div className="muted">{l.new_host ? 'new-signup window' : 'top level'}</div>}
+              </>
+            ) : (
+              <>
+                {b.eligible ? <span>next {b.next_amount.toLocaleString()} {b.next_asset || ''} in {fmtMs(b.remaining_ms || 0, { seconds: false })}</span> : <span style={{ color: '#991b1b' }}>{reasonText(b.reason) || 'not eligible'}</span>}
+                {b.rewards_in_period ? <span className="muted"> · {b.rewards_in_period} paid</span> : null}
+              </>
+            )}
+            {b.stale ? <span className="muted"> · refreshing</span> : null}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
 function UserSearch() {
   const navigate = useNavigate()
   const [q, setQ] = useState('')
-  const [hits, setHits] = useState<(Hit & { month?: { added: Record<string, number>; live_ms: number; count: number } })[] | null>(null)
+  const [hits, setHits] = useState<(Hit & { month?: { added: Record<string, number>; live_ms: number; count: number }; levels?: LevelBrief[] })[] | null>(null)
   const [busy, setBusy] = useState(false)
   const inflight = useRef<AbortController | null>(null)
   const search = async (e?: FormEvent) => {
@@ -518,13 +627,14 @@ function UserSearch() {
               <th>Host</th>
               <th>This month</th>
               <th>Live time</th>
+              <th>Level · next</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {hits.length === 0 ? (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   No accounts match.
                 </td>
               </tr>
@@ -544,6 +654,9 @@ function UserSearch() {
                   </td>
                   <td>{fmtAmounts(h.month?.added)}</td>
                   <td>{h.month ? fmtMs(h.month.live_ms, { seconds: false }) : '—'}</td>
+                  <td style={{ fontSize: 12 }}>
+                    <LevelCell levels={h.levels} />
+                  </td>
                   <td className="muted">Open →</td>
                 </tr>
               ))
@@ -567,10 +680,11 @@ type RosterEntry = {
   role?: string
   mode?: string
   room_id: string
-  rewards: { asset: string; amount: number; count: number }[]
+  rewards: { asset: string; amount: number; count: number; versions?: string[] }[]
   reward_last_at?: string
   gift_coins: number
   gift_count: number
+  levels?: LevelBrief[]
 }
 type RosterResp = { day: string; calendar: CalendarInfo; entries: RosterEntry[]; hosts: number; live_now: number; total_ms: number }
 
@@ -579,10 +693,17 @@ type RosterResp = { day: string; calendar: CalendarInfo; entries: RosterEntry[];
  * with their verified time, what they were paid and when, and gifts received.
  * Reads the source tables directly, so it is populated even when the daily
  * projection is behind.
+ *
+ * With `detail` (the Time & payouts page) a row click opens the host's day
+ * inline — every session and every payment with its policy version — instead
+ * of leaving the page. `day`/`onDayChange` make the picker URL-driven there.
  */
-function OnlineRoster() {
+function OnlineRoster({ day: dayProp, onDayChange, detail }: { day?: string; onDayChange?: (d: string) => void; detail?: boolean } = {}) {
   const navigate = useNavigate()
-  const [day, setDay] = useState('')
+  const [dayState, setDayState] = useState('')
+  const day = onDayChange ? dayProp || '' : dayState
+  const setDay = onDayChange || setDayState
+  const [open, setOpen] = useState('')
   const [resp, setResp] = useState<RosterResp | null>(null)
   const [error, setError] = useState('')
   const load = useCallback(async () => {
@@ -605,7 +726,7 @@ function OnlineRoster() {
   const isToday = !day || day === today
   return (
     <Card
-      title="Online today"
+      title={isToday ? 'Online today' : `Hosts on ${day}`}
       actions={
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="date" value={day || today || ''} max={today} onChange={(e) => setDay(e.target.value)} />
@@ -648,12 +769,18 @@ function OnlineRoster() {
                   <th>When</th>
                   <th>Reward got</th>
                   <th>Added at</th>
+                  <th>Level · next</th>
                   <th>Gifts received</th>
                 </tr>
               </thead>
               <tbody>
                 {resp.entries.map((e) => (
-                  <tr key={e.user_id} className="row-link" style={{ cursor: 'pointer' }} onClick={() => navigate(`/live-rewards/users/${e.user_id}`)}>
+                  <Fragment key={e.user_id}>
+                  <tr
+                    className="row-link"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => (detail ? setOpen(open === e.user_id ? '' : e.user_id) : navigate(`/live-rewards/users/${e.user_id}`))}
+                  >
                     <td>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                         <Avatar url={e.user?.avatar_url} name={e.user ? displayName(e.user) : e.user_id} />
@@ -685,12 +812,19 @@ function OnlineRoster() {
                         e.rewards.map((r) => (
                           <div key={r.asset}>
                             <strong>{r.amount.toLocaleString()}</strong> {r.asset}
-                            {r.count > 1 ? <span className="muted"> · {r.count}×</span> : null}
+                            <span className="muted">
+                              {' '}
+                              · {r.count} reward{r.count > 1 ? 's' : ''}
+                              {r.versions?.length ? ` · ${r.versions.join(' ')}` : ''}
+                            </span>
                           </div>
                         ))
                       )}
                     </td>
                     <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{e.reward_last_at ? fmtClock(e.reward_last_at) : '—'}</td>
+                    <td style={{ fontSize: 12 }}>
+                      <LevelCell levels={e.levels} />
+                    </td>
                     <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                       {e.gift_count ? (
                         <>
@@ -701,6 +835,14 @@ function OnlineRoster() {
                       )}
                     </td>
                   </tr>
+                  {detail && open === e.user_id && resp ? (
+                    <tr>
+                      <td colSpan={7} style={{ background: 'var(--surface-2, rgba(0,0,0,0.02))' }}>
+                        <RosterDayDetail uid={e.user_id} day={resp.day} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -708,6 +850,416 @@ function OnlineRoster() {
         </>
       )}
     </Card>
+  )
+}
+
+// ─── Day detail: one host's sessions + payments for a business day ───────────
+
+type DaySession = {
+  room_id: string
+  user_id: string
+  role: string
+  kind?: string
+  started_at?: string
+  ended_at?: string
+  verified_ms: number
+  paused_ms: number
+  segments: number
+  end_reason: string
+  live: boolean
+  counting?: boolean
+}
+
+/**
+ * The proof behind one roster row: every session the host ran that day
+ * (start → end, verified time) and every reward added (exact time, amount,
+ * the live time it required, and the policy version that paid it).
+ */
+function RosterDayDetail({ uid, day }: { uid: string; day: string }) {
+  const [sessions, setSessions] = useState<DaySession[] | null>(null)
+  const [sessErr, setSessErr] = useState('')
+  const [payouts, setPayouts] = useState<LedgerView[] | null>(null)
+  const [payErr, setPayErr] = useState('')
+
+  useEffect(() => {
+    let on = true
+    void (async () => {
+      const [s, p] = await Promise.all([
+        get<{ sessions: DaySession[] }>(`/v1/admin/live-time/users/${uid}/sessions?from=${day}&to=${day}`),
+        get<PayoutsResp>(`/v1/admin/rewards/payouts?user_id=${uid}&from=${day}&to=${day}&limit=50`),
+      ])
+      if (!on) return
+      if (s.ok) setSessions(s.data.sessions || [])
+      else setSessErr(s.message)
+      if (p.ok) setPayouts(p.data.items || [])
+      else setPayErr(p.message)
+    })()
+    return () => {
+      on = false
+    }
+  }, [uid, day])
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, padding: '8px 4px' }}>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Sessions · {day}</div>
+        {sessErr ? (
+          <p className="muted" style={{ fontSize: 12 }}>
+            {sessErr}
+          </p>
+        ) : !sessions ? (
+          <PageLoader />
+        ) : sessions.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12 }}>
+            No closed sessions recorded for this day.
+          </p>
+        ) : (
+          <table className="table" style={{ fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Ended</th>
+                <th>Role</th>
+                <th>Verified</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s) => (
+                <tr key={`${s.room_id}:${s.started_at || ''}`}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtClock(s.started_at)}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{s.live ? <StatusPill status="added" label="live now" /> : fmtClock(s.ended_at)}</td>
+                  <td>
+                    {s.role}
+                    {s.kind ? <span className="muted"> · {s.kind}</span> : null}
+                  </td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{fmtMs(s.verified_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Rewards · {day}</div>
+        {payErr ? (
+          <p className="muted" style={{ fontSize: 12 }}>
+            {payErr}
+          </p>
+        ) : !payouts ? (
+          <PageLoader />
+        ) : payouts.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12 }}>
+            Nothing paid this day.
+          </p>
+        ) : (
+          <table className="table" style={{ fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th>Added at</th>
+                <th>Reward</th>
+                <th>For time</th>
+                <th>Version</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payouts.map((r) => (
+                <tr key={r.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtClock(r.issued_at || r.earned_at)}</td>
+                  <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    {r.kind === 'reversal' ? '' : '+'}
+                    {r.amount.toLocaleString()} {r.asset}
+                  </td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtMs(r.required_ms)}</td>
+                  <td>
+                    <Link to={`/live-rewards/payouts/${r.id}`}>v{r.version_no}</Link>
+                  </td>
+                  <td className="muted">{r.status_label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div style={{ marginTop: 6, display: 'flex', gap: 12, fontSize: 12 }}>
+          <Link to={`/live-rewards/users/${uid}`}>Full reward profile →</Link>
+          <Link to={`/live-time/users/${uid}`}>Live time profile →</Link>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Host lookup: one host's time + payouts by day / week / month ────────────
+
+const RANGE_LABEL: Record<string, string> = { day: 'Today', week: 'This week', month: 'This month' }
+
+/**
+ * Find one host by username / email / phone / id and read their verified live
+ * time and rewards added, broken down by business day inside the day / week /
+ * month window — plus every payout in that window. Uses the same figures as
+ * the host's full profile, focused on time + payments.
+ */
+function HostTimeAndPayouts() {
+  const [q, setQ] = useState('')
+  const [hits, setHits] = useState<Hit[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [sel, setSel] = useState<Hit | null>(null)
+  const [range, setRange] = useState<'day' | 'week' | 'month'>('month')
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [payouts, setPayouts] = useState<LedgerView[] | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const searchRef = useRef<AbortController | null>(null)
+
+  // Debounced account search — only while nobody is selected.
+  useEffect(() => {
+    if (sel) return
+    const term = q.trim()
+    if (!term) {
+      setHits(null)
+      return
+    }
+    const id = window.setTimeout(() => {
+      void (async () => {
+        searchRef.current?.abort()
+        const ac = new AbortController()
+        searchRef.current = ac
+        setSearching(true)
+        const r = await get<{ items: Hit[] }>(`/v1/admin/rewards/search?q=${encodeURIComponent(term)}`, { signal: ac.signal })
+        if (ac.signal.aborted) return
+        setSearching(false)
+        if (r.ok) setHits((r.data as unknown as { items?: Hit[] }).items ?? (r.data as unknown as Hit[]) ?? [])
+        else setError(r.message)
+      })()
+    }, 250)
+    return () => window.clearTimeout(id)
+  }, [q, sel])
+
+  // Selected host: per-day summary for the window + its payouts.
+  const loadHost = useCallback(async (uid: string, rng: string) => {
+    setLoading(true)
+    setError('')
+    const u = await get<UserResp>(`/v1/admin/rewards/users/${uid}?range=${rng}`)
+    if (!u.ok) {
+      setLoading(false)
+      setError(u.message)
+      return
+    }
+    const sum = u.data.summary
+    setSummary(sum)
+    const p = new URLSearchParams({ user_id: uid, limit: '200' })
+    if (sum?.from) p.set('from', sum.from)
+    if (sum?.to) p.set('to', sum.to)
+    const pr = await get<PayoutsResp>(`/v1/admin/rewards/payouts?${p}`)
+    setLoading(false)
+    setPayouts(pr.ok ? pr.data.items || [] : [])
+  }, [])
+
+  useEffect(() => {
+    if (sel) void loadHost(sel.id, range)
+  }, [sel, range, loadHost])
+
+  const pick = (h: Hit) => {
+    setSel(h)
+    setHits(null)
+  }
+  const clear = () => {
+    setSel(null)
+    setSummary(null)
+    setPayouts(null)
+    setHits(null)
+    setQ('')
+  }
+
+  return (
+    <Card title="Find a host · time & payouts">
+      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        Search a host by username, email, phone or id to see their verified live time and rewards added — by day inside the day,
+        week or month window — and every payout in it.
+      </p>
+      {!sel ? (
+        <>
+          <Field
+            label="Username, name, email, phone or id"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="e.g. @host, host@mail.com, +15551234567"
+          />
+          {error ? <div className="form-error" style={{ marginTop: 8 }}>{error}</div> : null}
+          {searching ? <PageLoader label="Searching…" /> : null}
+          {hits && !searching ? (
+            hits.length === 0 ? (
+              <p className="muted" style={{ margin: '10px 0 0' }}>
+                No account matches “{q.trim()}”.
+              </p>
+            ) : (
+              <table className="table" style={{ marginTop: 10 }}>
+                <tbody>
+                  {hits.map((h) => (
+                    <tr key={h.id} className="row-link" style={{ cursor: 'pointer' }} onClick={() => pick(h)}>
+                      <td>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <Avatar url={h.avatar_url} name={displayName(h)} />
+                          <span>
+                            <strong>{displayName(h)}</strong>
+                            <span className="muted" style={{ display: 'block', fontSize: 11 }}>
+                              @{h.username} · #{h.id}
+                              {h.email ? ` · ${h.email}` : h.phone ? ` · ${h.phone}` : ''}
+                            </span>
+                          </span>
+                        </span>
+                      </td>
+                      <td className="muted">Open →</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : null}
+        </>
+      ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <Avatar url={sel.avatar_url} name={displayName(sel)} size={36} />
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <strong>{displayName(sel)}</strong>
+              <div className="muted" style={{ fontSize: 11 }}>
+                @{sel.username} · #{sel.id}
+                {sel.email ? ` · ${sel.email}` : sel.phone ? ` · ${sel.phone}` : ''}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(['day', 'week', 'month'] as const).map((b) => (
+                <Button key={b} size="sm" variant={range === b ? 'primary' : 'ghost'} onClick={() => setRange(b)}>
+                  {b === 'day' ? 'Daily' : b === 'week' ? 'Weekly' : 'Monthly'}
+                </Button>
+              ))}
+            </div>
+            <Button size="sm" variant="secondary" onClick={clear}>
+              Change host
+            </Button>
+            <Link to={`/live-rewards/users/${sel.id}`} className="muted" style={{ fontSize: 12 }}>
+              Full profile →
+            </Link>
+          </div>
+
+          {error ? <div className="form-error" style={{ marginTop: 10 }}>{error}</div> : null}
+          {loading && !summary ? (
+            <PageLoader />
+          ) : summary ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, margin: '12px 0' }}>
+                <Stat label={`Live time · ${RANGE_LABEL[range]}`} value={fmtMs(summary.live_ms || 0, { seconds: false })} sub={`${summary.from || '—'} → ${summary.to || '—'}`} />
+                <Stat label={`Rewards added · ${RANGE_LABEL[range]}`} value={fmtAmounts(summary.added)} sub={`${summary.count || 0} reward${summary.count === 1 ? '' : 's'}`} />
+                <Stat label="Pending" value={fmtAmounts(summary.pending)} sub="earned, not yet in wallet" />
+                <Stat label="Claimable" value={fmtAmounts(summary.claimable)} />
+              </div>
+
+              <div style={{ fontSize: 13, fontWeight: 700, margin: '4px 0 6px' }}>By business day</div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Day</th>
+                    <th>Live time</th>
+                    <th>Rewards added</th>
+                    <th>Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(summary.days || []).length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="muted">
+                        No live time or rewards in this {range}.
+                      </td>
+                    </tr>
+                  ) : (
+                    summary.days.map((d) => (
+                      <tr key={d.day}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{d.label || d.day}</div>
+                          <div className="muted" style={{ fontSize: 11 }}>{d.day}</div>
+                        </td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{fmtMs(d.live_ms || 0, { seconds: false })}</td>
+                        <td>{fmtAmounts(d.added)}</td>
+                        <td>{d.count || 0}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+
+              <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>Payouts · {RANGE_LABEL[range]}</div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Day · completed</th>
+                    <th>Reward</th>
+                    <th>Required</th>
+                    <th>Added · balance</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {!payouts ? (
+                    <tr>
+                      <td colSpan={6} className="muted">
+                        Loading…
+                      </td>
+                    </tr>
+                  ) : payouts.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="muted">
+                        Nothing paid in this {range}.
+                      </td>
+                    </tr>
+                  ) : (
+                    payouts.map((r) => <RewardRow key={r.id} r={r} to={`/live-rewards/payouts/${r.id}`} />)
+                  )}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ─── Time & payouts page ─────────────────────────────────────────────────────
+
+/**
+ * Every host of a business day in one place — live now on top, then the most
+ * recent — paid or not, with time, rewards (count + policy version), gifts,
+ * and a click-open of each host's sessions and payments. The Daily stats
+ * rows link here, so a day's total can always be broken down to people.
+ */
+function TimeAndPayouts() {
+  const [params, setParams] = useSearchParams()
+  const day = params.get('day') || ''
+  return (
+    <div>
+      <div className="page-head">
+        <h1>Time &amp; payouts</h1>
+        <p>
+          Who was live on a day — still live or ended, paid or not — with their verified time, every reward (and the policy version that
+          paid it), and gifts received. Click a host to see their sessions and each payment.
+        </p>
+      </div>
+      <SectionNav />
+      <HostTimeAndPayouts />
+      <div style={{ marginTop: 16 }} />
+      <OnlineRoster
+        day={day}
+        onDayChange={(d) => {
+          const next = new URLSearchParams(params)
+          if (d) next.set('day', d)
+          else next.delete('day')
+          setParams(next)
+        }}
+        detail
+      />
+    </div>
   )
 }
 
@@ -965,6 +1517,7 @@ function RewardsPayouts() {
 // ─── Daily / Weekly / Monthly ────────────────────────────────────────────────
 
 function RewardsStats() {
+  const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const bucket = params.get('bucket') || 'day'
   const from = params.get('from') || ''
@@ -1040,7 +1593,13 @@ function RewardsStats() {
                 </tr>
               ) : (
                 resp.buckets.map((b) => (
-                  <tr key={b.key}>
+                  <tr
+                    key={b.key}
+                    className={bucket === 'day' ? 'row-link' : undefined}
+                    style={bucket === 'day' ? { cursor: 'pointer' } : undefined}
+                    title={bucket === 'day' ? 'See every host of this day: time, rewards, gifts' : undefined}
+                    onClick={bucket === 'day' ? () => navigate(`/live-rewards/time?day=${b.key}`) : undefined}
+                  >
                     <td>
                       <div style={{ fontWeight: 600 }}>{b.label}</div>
                       <div className="muted" style={{ fontSize: 11 }}>
@@ -1063,6 +1622,191 @@ function RewardsStats() {
         )}
       </Card>
     </div>
+  )
+}
+
+/**
+ * One line per day: "2 added (1 × 1,000 + 1 × 3,000 coins) · 1 pending".
+ * Groups the day's rows by status and rate so a level change mid-day reads
+ * as two rates, not a mystery total.
+ */
+function dayRollup(rows: LedgerView[]): string {
+  const earn = rows.filter((r) => r.kind === 'earn')
+  if (!earn.length) return ''
+  const by = (status: string) => earn.filter((r) => r.status === status)
+  const rates = (xs: LedgerView[]) => {
+    const m = new Map<string, number>()
+    for (const r of xs) m.set(`${r.amount}|${r.asset}`, (m.get(`${r.amount}|${r.asset}`) || 0) + 1)
+    return Array.from(m.entries())
+      .map(([k, n]) => {
+        const [amount, asset] = k.split('|')
+        return `${n} × ${Number(amount).toLocaleString()} ${asset}`
+      })
+      .join(' + ')
+  }
+  const parts: string[] = []
+  const added = [...by('added'), ...by('claimed')]
+  if (added.length) parts.push(`${added.length} added (${rates(added)})`)
+  const claimable = by('claimable')
+  if (claimable.length) parts.push(`${claimable.length} waiting to claim (${rates(claimable)})`)
+  const pending = by('pending')
+  if (pending.length) parts.push(`${pending.length} pending`)
+  const expired = [...by('expired'), ...by('cancelled')]
+  if (expired.length) parts.push(`${expired.length} expired / cancelled`)
+  return parts.join(' · ')
+}
+
+// ─── Gift-level ladder ───────────────────────────────────────────────────────
+
+/** A thin progress bar; value/max in any unit. */
+function Bar({ value, max, color }: { value: number; max: number; color?: string }) {
+  const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0
+  return (
+    <div style={{ height: 6, borderRadius: 3, background: 'var(--wash-deep, #e5e7eb)', overflow: 'hidden', marginTop: 4 }}>
+      <div style={{ width: `${pct}%`, height: '100%', background: color || 'var(--accent, #2563eb)', transition: 'width .3s' }} />
+    </div>
+  )
+}
+
+/**
+ * The host's gift level, in the words a manager asks for: current level
+ * and rate, diamonds received this period and how many more unlock the next
+ * level, paid hours today against the level's cap, and today's total.
+ */
+function LadderPanel({ ladder }: { ladder: LadderStatus }) {
+  const l = ladder
+  const nextMin = l.next_tier_min || 0
+  const prevMin = l.tiers.filter((t) => t.kind === 'weekly' && t.min_received <= l.received_diamonds).reduce((m, t) => Math.max(m, t.min_received), 0)
+  const span = nextMin > prevMin ? nextMin - prevMin : 0
+  return (
+    <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: 'var(--wash, #f8fafc)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, fontSize: 12 }}>
+      <div>
+        <div className="muted">Current level</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          {l.unlocked ? l.tier_name : 'None yet'}
+          {l.new_host ? <span className="status-pill" style={{ marginLeft: 6, fontSize: 10, background: '#dbeafe', color: '#1e3a8a' }}>new host{l.new_host_days_left != null ? ` · ${l.new_host_days_left}d left` : ''}</span> : null}
+          {l.weekly_on === false ? <span className="status-pill" style={{ marginLeft: 6, fontSize: 10, background: '#fee2e2', color: '#991b1b' }}>weekly off</span> : null}
+          {l.new_host_on === false ? <span className="status-pill" style={{ marginLeft: 6, fontSize: 10, background: '#fee2e2', color: '#991b1b' }}>new-signup off</span> : null}
+        </div>
+        <div>
+          {l.unlocked ? (
+            <>pays <strong>{l.rate.toLocaleString()} {l.asset}</strong> {l.milestone ? 'once this period, when the level time and its conditions are met' : 'per paid hour'}</>
+          ) : (
+            <span style={{ color: '#991b1b' }}>{l.milestone ? 'nothing is paid until the first level’s diamonds are received' : 'no paid hours until the first level’s diamonds are received'}</span>
+          )}
+        </div>
+      </div>
+      <div>
+        <div className="muted">Diamonds received this period</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>{l.received_diamonds.toLocaleString()}</div>
+        {l.next_tier_name ? (
+          <>
+            <div>
+              <strong>{l.remaining_diamonds.toLocaleString()}</strong> more → {l.next_tier_name} ({(l.next_tier_rate || 0).toLocaleString()}{l.milestone ? '' : '/h'})
+            </div>
+            <Bar value={l.received_diamonds - prevMin} max={span} />
+          </>
+        ) : l.new_host ? (
+          <div className="muted">new-signup window — the weekly levels start the day it ends</div>
+        ) : (
+          <div className="muted">top level reached</div>
+        )}
+      </div>
+      {l.milestone ? null : (
+        <div>
+          <div className="muted">Paid hours today</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>
+            {l.hours_paid_today}
+            {l.cap_hours_today ? ` / ${l.cap_hours_today}` : ''}
+          </div>
+          {l.cap_hours_today ? <Bar value={l.hours_paid_today} max={l.cap_hours_today} color={l.hours_paid_today >= l.cap_hours_today ? '#92400e' : undefined} /> : <div className="muted">no daily cap</div>}
+          {l.cap_hours_today && l.hours_paid_today >= l.cap_hours_today ? <div style={{ color: '#92400e' }}>cap reached — more hours pay again tomorrow</div> : null}
+        </div>
+      )}
+      <div>
+        <div className="muted">Today’s total from this program</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          {l.today_total.toLocaleString()} {l.asset || ''}
+        </div>
+        <div className="muted">
+          {l.milestone ? `${l.hours_paid_today} reward${l.hours_paid_today === 1 ? '' : 's'} today` : `${l.hours_paid_today} paid hour${l.hours_paid_today === 1 ? '' : 's'}`} · added to wallet
+        </div>
+      </div>
+      <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {l.tiers.map((t) => (
+          <span
+            key={t.key}
+            className="status-pill"
+            title={t.kind === 'new_host' ? `accounts up to ${t.new_host_days} days old` : `from ${t.min_received.toLocaleString()} diamonds received`}
+            style={{
+              fontSize: 11,
+              background: t.current ? 'var(--accent-soft)' : t.reached ? '#fef3c7' : 'var(--wash-deep)',
+              color: t.current ? 'var(--accent-hover)' : t.reached ? '#92400e' : 'var(--ink-soft)',
+              outline: t.current ? '1px solid var(--accent-hover)' : undefined,
+            }}
+          >
+            {t.name} · {t.amount.toLocaleString()}{l.milestone ? '' : '/h'}{t.max_hours_per_day ? ` · max ${t.max_hours_per_day}/day` : ''}
+            {t.kind === 'new_host' ? ` · ≤${t.new_host_days}d` : ` · ≥${t.min_received.toLocaleString()}`}
+            {t.current ? ' ← now' : ''}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Open checks for one host: anything the auditor flagged as wrong, missing or late. */
+function ChecksCard({ checks }: { checks: Finding[] }) {
+  const open = checks.filter((f) => !f.resolved_at)
+  return (
+    <Card title={`Checks · ${open.length ? `${open.length} open` : 'all clear'}`}>
+      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        The auditor replays every paid hour against the rules that produced it (level for the recorded diamonds, amount, week, daily cap, wallet entry) and re-derives missing hours. Anything that does not match shows here, on the
+        host’s own page, until it is repaired or resolved.
+      </p>
+      {!open.length ? (
+        <p className="muted">No open checks for this host.</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>What</th>
+              <th>Where</th>
+              <th>Detail</th>
+              <th>Found</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {open.map((f) => (
+              <tr key={f.id}>
+                <td style={{ fontSize: 12 }}>
+                  <StatusPill status={f.severity >= 4 ? 'expired' : 'pending'} label={f.kind} />
+                  <div>{findingText(f.kind)}</div>
+                </td>
+                <td style={{ fontSize: 12 }}>
+                  {f.period_key}
+                  {f.threshold_ms ? ` · ${fmtMs(f.threshold_ms, { seconds: false })}` : ''}
+                </td>
+                <td style={{ fontSize: 11 }}>
+                  <code>{JSON.stringify(f.detail)}</code>
+                </td>
+                <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  {fmtClock(f.found_at)}
+                  {f.repaired_at ? <div className="muted">repaired {fmtClock(f.repaired_at)}</div> : f.repair_attempts ? <div className="muted">{f.repair_attempts} repair attempt{f.repair_attempts === 1 ? '' : 's'}</div> : null}
+                </td>
+                <td style={{ fontSize: 12 }}>
+                  {f.ledger_id ? <Link to={`/live-rewards/payouts/${f.ledger_id}`}>payout →</Link> : null}
+                  <div>
+                    <Link to={`/live-rewards/findings?user_id=${f.user_id}`}>all checks →</Link>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
   )
 }
 
@@ -1166,6 +1910,8 @@ function RewardsUser() {
                   {c.period_kind} · {c.period_key} · {roles.join('/') || '—'} · {c.mode_rule} · {c.delivery}
                 </span>
                 <StatusPill status={c.eligible ? 'added' : 'expired'} label={c.eligible ? 'Eligible' : 'Not eligible'} />
+                {c.stale ? <StatusPill status="pending" label="refreshing" /> : null}
+                {c.computed_at ? <span className="muted" style={{ fontSize: 11 }}>as of {fmtClock(c.computed_at)}</span> : null}
               </div>
               {!c.eligible ? (
                 <div style={{ fontSize: 12, marginTop: 4, color: '#991b1b' }}>
@@ -1173,6 +1919,7 @@ function RewardsUser() {
                   {c.reason === 'TIME_NOT_REACHED' && c.next_threshold_ms ? ` — ${fmtMs(c.remaining_ms || 0, { seconds: false })} more live time needed for the next level.` : ''}
                 </div>
               ) : null}
+              {c.ladder ? <LadderPanel ladder={c.ladder} /> : null}
               <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                 Verified {fmtMs(verified, { seconds: false })}
                 {c.next_threshold_ms ? (
@@ -1230,6 +1977,8 @@ function RewardsUser() {
           })
         )}
       </Card>
+
+      <ChecksCard checks={resp.checks || []} />
 
       <Card title="Live sessions · last 7 days">
         <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
@@ -1326,6 +2075,7 @@ function RewardsUser() {
                 <span className="muted" style={{ fontSize: 12 }}>
                   {d.day} · live {fmtMs(d.live_ms || 0, { seconds: false })} · {fmtAmounts(d.totals)}
                 </span>
+                <span className="muted" style={{ fontSize: 12 }}>{dayRollup(d.rewards || [])}</span>
               </div>
               <table className="table" style={{ marginTop: 6 }}>
                 <tbody>
@@ -1528,6 +2278,21 @@ function RewardDetailPage() {
           sub={d.asset}
         />
         <Stat label="Status" value={d.status_label} sub={`${d.kind} · ${d.source} · ${d.delivery}`} />
+        {typeof d.evidence?.tier_name === 'string' ? (
+          d.evidence.milestone ? (
+            <Stat
+              label="Gift level at completion"
+              value={String(d.evidence.tier_name)}
+              sub={`${Number(d.evidence.rate || d.amount).toLocaleString()} ${d.asset} once this period · ${Number(d.evidence.received_diamonds || 0).toLocaleString()} diamonds received`}
+            />
+          ) : (
+            <Stat
+              label="Gift level for this hour"
+              value={String(d.evidence.tier_name)}
+              sub={`${Number(d.evidence.rate || d.amount).toLocaleString()} ${d.asset}/h · ${Number(d.evidence.received_diamonds || 0).toLocaleString()} diamonds received${d.evidence.hour_no_today ? ` · hour ${String(d.evidence.hour_no_today)} of the day` : ''}${d.evidence.max_hours_per_day ? ` (max ${String(d.evidence.max_hours_per_day)})` : ''}`}
+            />
+          )
+        ) : null}
       </div>
       <Card title="Timeline">
         <ol style={{ paddingLeft: 18, fontSize: 13 }}>
@@ -1570,12 +2335,24 @@ function RewardsFindings() {
   const [params, setParams] = useSearchParams()
   const resolved = params.get('resolved') === '1'
   const kind = params.get('kind') || ''
+  const userID = params.get('user_id') || ''
+  const campaignID = params.get('campaign_id') || ''
+  const severity = params.get('severity') || ''
+  const [hostInput, setHostInput] = useState(userID)
   const [resp, setResp] = useState<{ items: Finding[]; open: Record<string, number>; cursor: string } | null>(null)
   const [error, setError] = useState('')
+  /** Keep every other filter when one changes. */
+  const setFilter = (patch: Record<string, string>) => {
+    const next: Record<string, string> = { ...(resolved ? { resolved: '1' } : {}), kind, user_id: userID, campaign_id: campaignID, severity, ...patch }
+    setParams(Object.fromEntries(Object.entries(next).filter(([, v]) => v !== '')))
+  }
   const load = useCallback(async () => {
     const p = new URLSearchParams()
     if (resolved) p.set('resolved', '1')
     if (kind) p.set('kind', kind)
+    if (userID) p.set('user_id', userID)
+    if (campaignID) p.set('campaign_id', campaignID)
+    if (severity) p.set('severity', severity)
     const r = await get<{ items: Finding[]; open: Record<string, number>; cursor: string }>(`/v1/admin/rewards/findings?${p}`)
     if (!r.ok) {
       setError(r.message)
@@ -1583,7 +2360,7 @@ function RewardsFindings() {
     }
     setError('')
     setResp(r.data)
-  }, [resolved, kind])
+  }, [resolved, kind, userID, campaignID, severity])
   useEffect(() => {
     void load()
   }, [load])
@@ -1600,18 +2377,21 @@ function RewardsFindings() {
     <div>
       <div className="page-head">
         <h1>Findings</h1>
-        <p>Facts the reconciler found: time passed with no reward, ledger without a wallet entry, late issues. Repairs run through the normal path.</p>
+        <p>
+          Facts the auditor found: a missing hour, a wrongly paid level or amount, a reward in the wrong week, more hours than the level allows, a wallet entry missing. Detection is separate from repair; repairs run through the
+          normal payout path and are visible as repaired here and on the host’s page.
+        </p>
       </div>
       <SectionNav />
       <Card>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Button size="sm" variant={resolved ? 'ghost' : 'primary'} onClick={() => setParams({ kind })}>
+          <Button size="sm" variant={resolved ? 'ghost' : 'primary'} onClick={() => setFilter({ resolved: '' })}>
             Open
           </Button>
-          <Button size="sm" variant={resolved ? 'primary' : 'ghost'} onClick={() => setParams({ resolved: '1', kind })}>
+          <Button size="sm" variant={resolved ? 'primary' : 'ghost'} onClick={() => setFilter({ resolved: '1' })}>
             Resolved
           </Button>
-          <select className="admin-context-select" value={kind} onChange={(e) => setParams({ ...(resolved ? { resolved: '1' } : {}), kind: e.target.value })}>
+          <select className="admin-context-select" value={kind} onChange={(e) => setFilter({ kind: e.target.value })}>
             <option value="">All kinds</option>
             {Object.keys(resp?.open || {}).map((k) => (
               <option key={k} value={k}>
@@ -1619,6 +2399,33 @@ function RewardsFindings() {
               </option>
             ))}
           </select>
+          <select className="admin-context-select" value={severity} onChange={(e) => setFilter({ severity: e.target.value })}>
+            <option value="">Any severity</option>
+            <option value="4">Money wrong (4+)</option>
+            <option value="3">Missing / late (3+)</option>
+          </select>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              setFilter({ user_id: hostInput.trim().replace(/^#/, '') })
+            }}
+            style={{ display: 'flex', gap: 4 }}
+          >
+            <input className="admin-context-select" placeholder="Host id" value={hostInput} onChange={(e) => setHostInput(e.target.value)} style={{ width: 140 }} />
+            <Button size="sm" variant="ghost" type="submit">
+              Filter
+            </Button>
+            {userID ? (
+              <Button size="sm" variant="ghost" onClick={() => { setHostInput(''); setFilter({ user_id: '' }) }}>
+                Clear
+              </Button>
+            ) : null}
+          </form>
+          {campaignID ? (
+            <Button size="sm" variant="ghost" onClick={() => setFilter({ campaign_id: '' })}>
+              campaign {campaignID} ✕
+            </Button>
+          ) : null}
           <span style={{ flex: 1 }} />
           <Button size="sm" variant="secondary" onClick={() => void rebuild()}>
             Rebuild projections
@@ -1654,6 +2461,7 @@ function RewardsFindings() {
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtClock(f.found_at)}</td>
                     <td>
                       <StatusPill status={f.severity >= 3 ? 'expired' : 'pending'} label={f.kind} />
+                      <div style={{ fontSize: 11 }}>{findingText(f.kind)}</div>
                       {f.repaired_at ? <div className="muted" style={{ fontSize: 11 }}>repaired {fmtClock(f.repaired_at)}</div> : f.repair_attempts ? <div className="muted" style={{ fontSize: 11 }}>{f.repair_attempts} repair attempts</div> : null}
                     </td>
                     <td>{f.user_id && f.user_id !== '0' ? <Link to={`/live-rewards/users/${f.user_id}`}>#{f.user_id}</Link> : '—'}</td>
