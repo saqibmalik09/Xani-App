@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,8 +42,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import app.xani.core.isolate.runFeature
 import app.xani.core.net.ApiResponse
+import app.xani.core.net.ApplicationFormData
 import app.xani.core.net.AuthState
 import app.xani.core.net.CodeInfoData
 import app.xani.core.net.FormFieldData
@@ -93,6 +97,9 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
     var openRequestId by rememberSaveable { mutableStateOf(startRequestId) }
     var toast by remember { mutableStateOf("") }
     var pendingCount by remember { mutableStateOf(0) }
+    // Bumped when a seat ended (leave role): the Mine list under the detail
+    // overlay stays composed, so it re-reads the workspace on this key.
+    var wsReload by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(toast) {
@@ -149,7 +156,7 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
             }
             Box(Modifier.fillMaxWidth().height(rdp(1)).background(ProfileTokens.Hairline))
             when (tab) {
-                RolesTab.Mine -> MineTab(copy, joinPrefill, joinPrefillRole, onOpen = { openMembership = it }, onToast = { toast = it })
+                RolesTab.Mine -> MineTab(copy, joinPrefill, joinPrefillRole, wsReload, onOpen = { openMembership = it }, onToast = { toast = it })
                 RolesTab.Requests -> RequestList(
                     copy = copy,
                     empty = copy.t(Copy.RolesRequestsEmpty),
@@ -166,7 +173,16 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
         }
 
         openMembership?.let { m ->
-            MembershipDetail(copy, m, onBack = { openMembership = null }, onToast = { toast = it })
+            MembershipDetail(
+                copy, m,
+                onBack = { openMembership = null },
+                onToast = { toast = it },
+                onLeft = { msg ->
+                    toast = msg
+                    openMembership = null
+                    wsReload++
+                },
+            )
         }
         if (openRequestId > 0L) {
             RequestDetail(
@@ -199,14 +215,14 @@ fun RolesScreen(copy: Copy, onBack: () -> Unit, startRequestId: Long = 0L) {
 // ─── my roles ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun MineTab(copy: Copy, joinPrefill: String, joinPrefillRole: String, onOpen: (WorkspaceMembershipData) -> Unit, onToast: (String) -> Unit) {
+private fun MineTab(copy: Copy, joinPrefill: String, joinPrefillRole: String, extReload: Int, onOpen: (WorkspaceMembershipData) -> Unit, onToast: (String) -> Unit) {
     var memberships by remember { mutableStateOf<List<WorkspaceMembershipData>?>(null) }
     var codes by remember { mutableStateOf<List<ReferralCodeData>>(emptyList()) }
     var failed by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(reloadKey) {
+    LaunchedEffect(reloadKey, extReload) {
         // One call: seats held, what each may recruit, and which actions the
         // server will honour. The UI below is drawn from it, never guessed.
         val ws = runFeature(null as WorkspaceData?) { Xani.roles.workspace().value }
@@ -219,7 +235,11 @@ private fun MineTab(copy: Copy, joinPrefill: String, joinPrefillRole: String, on
         codes = runFeature(emptyList()) { Xani.roles.myCodes().value ?: emptyList() }
     }
 
-    LazyColumn(Modifier.fillMaxSize()) {
+    // imePadding: the join form sits at the bottom of this list, so without it
+    // the keyboard covers the fields and the Apply button with nothing to
+    // scroll to. Shrinking the list instead lets Compose bring the focused
+    // field into view.
+    LazyColumn(Modifier.fillMaxSize().imePadding()) {
         when {
             failed -> item(key = "failed") { Failed(copy) { reloadKey++ } }
             memberships == null -> item(key = "loading") { Loading() }
@@ -393,6 +413,11 @@ private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDon
     var form by remember { mutableStateOf<List<FormFieldData>?>(null) }
     val answers = remember { mutableStateMapOf<String, String>() }
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Face verification gate: the role's form says whether it is required;
+    // the server enforces it again on apply (error code "face_required").
+    var faceRequired by remember { mutableStateOf(false) }
+    var faceVerified by remember { mutableStateOf(false) }
+    var showFaceVerify by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // A tapped referral link lands here with the code (and often the role) known.
@@ -427,8 +452,14 @@ private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDon
         form = null
         answers.clear()
         fieldErrors = emptyMap()
+        faceRequired = false
         if (roleSlug.isEmpty()) return@LaunchedEffect
-        form = runFeature(emptyList()) { Xani.roles.applicationForm(roleSlug).value?.fields ?: emptyList() }
+        val fd = runFeature(null as ApplicationFormData?) { Xani.roles.applicationForm(roleSlug).value }
+        form = fd?.fields ?: emptyList()
+        faceRequired = fd?.faceRequired == true
+        if (faceRequired && !faceVerified) {
+            faceVerified = runFeature(false) { Xani.face.status().value?.faceVerified == true }
+        }
     }
 
     Column(Modifier.fillMaxWidth().padding(rdp(18)).padding(top = rdp(6))) {
@@ -491,10 +522,17 @@ private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDon
                 imeAction = ImeAction.Done,
                 maxChars = 300,
             )
+            // The face check is its own step with its own button — opening the
+            // camera off the Apply tap read as "Apply failed". Apply stays
+            // disabled until the check passes.
+            if (faceRequired) {
+                Spacer(Modifier.height(rdp(12)))
+                FaceGateCard(copy, faceVerified) { showFaceVerify = true }
+            }
             Spacer(Modifier.height(rdp(12)))
             PrimaryCta(
                 text = copy.t(Copy.RolesApply),
-                enabled = !busy && roleSlug.isNotEmpty() && fields != null,
+                enabled = !busy && roleSlug.isNotEmpty() && fields != null && (!faceRequired || faceVerified),
                 loading = busy,
                 onClick = {
                     val local = validateAnswers(copy, fields.orEmpty(), answers)
@@ -511,6 +549,15 @@ private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDon
                         }
                         busy = false
                         if (r == null || !r.ok) {
+                            // The server is the authority: an un-verified face
+                            // bounces here even if the form said otherwise.
+                            // Surface the step instead of springing the camera.
+                            if (r?.code == "face_required") {
+                                faceRequired = true
+                                faceVerified = false
+                                error = r.message
+                                return@launch
+                            }
                             error = r?.message ?: copy.t(Copy.RolesLoadFailed)
                             if (r != null && r.fields.isNotEmpty()) fieldErrors = r.fields
                             return@launch
@@ -524,20 +571,79 @@ private fun JoinWithCode(copy: Copy, prefill: String, prefillRole: String, onDon
             )
         }
     }
+    if (showFaceVerify) {
+        // Full-screen capture flow on top of the join form; verifying flips
+        // the local flag so Apply unlocks.
+        Dialog(
+            onDismissRequest = { showFaceVerify = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            FaceVerifyScreen(copy) { verified ->
+                showFaceVerify = false
+                if (verified) faceVerified = true
+            }
+        }
+    }
+}
+
+/**
+ * The face-check step of a gated application, drawn above the Apply button:
+ * a titled card with its own Verify button, flipping to a green verified
+ * state once the check passes.
+ */
+@Composable
+private fun FaceGateCard(copy: Copy, verified: Boolean, onVerify: () -> Unit) {
+    val shape = RoundedCornerShape(rdp(12))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(ProfileTokens.Bg2)
+            .border(rdp(1), if (verified) ProfileTokens.Ok else ProfileTokens.Hairline, shape)
+            .padding(horizontal = rdp(14), vertical = rdp(12)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(rdp(10)),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(rdp(6))) {
+                XaniText(copy.t(Copy.FaceTitle), Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 13f)
+                if (verified) ProfileIco.Verified(rdp(15))
+            }
+            XaniText(
+                if (verified) copy.t(Copy.FaceOkVerified) else copy.t(Copy.FaceGateHint),
+                Type.Caption,
+                color = if (verified) ProfileTokens.Ok else ProfileTokens.Sub,
+                fontSizeOverride = 12f,
+                modifier = Modifier.padding(top = rdp(2)),
+            )
+        }
+        if (!verified) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(rdp(17)))
+                    .background(ProfileTokens.Accent)
+                    .pressable(onClick = onVerify)
+                    .padding(horizontal = rdp(14), vertical = rdp(9)),
+            ) {
+                XaniText(copy.t(Copy.FaceVerifyCta), Type.LabelBold, color = Color.White, fontSizeOverride = 12f)
+            }
+        }
+    }
 }
 
 // ─── membership detail: upline + downline ────────────────────────────────────
 
 @Composable
-private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: () -> Unit, onToast: (String) -> Unit) {
+private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: () -> Unit, onToast: (String) -> Unit, onLeft: (String) -> Unit) {
     val m = wm.membership
     val canAdd = m.isActive && wm.recruit.any { it.canAssign }
     var adding by rememberSaveable(m.id) { mutableStateOf(false) }
     var managing by remember(m.id) { mutableStateOf<MembershipData?>(null) }
     var upline by remember(m.id) { mutableStateOf<List<MembershipData>?>(null) }
-    // "" | "leave" | "shift": the member's own upline action, drawn in place
-    // of the lists. The buttons come from role policy (workspace actions);
-    // the server re-checks both on submit.
+    // "" | "leave" | "shift" | "leaveRole": the member's own action, drawn in
+    // place of the lists. Leave/shift upline come from role policy (workspace
+    // actions); leave role is always offered on an active own seat. The
+    // server re-checks everything on submit.
     var selfAct by rememberSaveable(m.id) { mutableStateOf("") }
     var uplineKey by remember(m.id) { mutableStateOf(0) }
     var whole by rememberSaveable(m.id) { mutableStateOf(false) }
@@ -597,6 +703,10 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                 selfAct = ""
                 onToast(msg)
             }
+            "leaveRole" -> LeaveRoleForm(copy, m.id, m.role.title) { msg ->
+                selfAct = ""
+                onLeft(msg)
+            }
             else -> LazyColumn(Modifier.fillMaxSize()) {
             item(key = "upline-title") { SectionTitle(copy.t(Copy.RolesUpline)) }
             item(key = "upline") {
@@ -618,10 +728,12 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                     }
                 }
             }
-            // Role-policy self-service: leave needs an upline to leave; shift
-            // is offered whenever the role allows it. Both re-checked server-side.
+            // Role-policy self-service: leave-upline needs an upline to leave;
+            // shift is offered whenever the role allows it. Leave role ends the
+            // seat itself and is always available while it is active. All
+            // re-checked server-side.
             val hasUpline = upline?.isNotEmpty() == true
-            if ((wm.actions.leaveUpline && hasUpline) || wm.actions.shiftUpline) {
+            if (m.isActive || (wm.actions.leaveUpline && hasUpline) || wm.actions.shiftUpline) {
                 item(key = "upline-actions") {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = rdp(18), vertical = rdp(8)),
@@ -629,6 +741,7 @@ private fun MembershipDetail(copy: Copy, wm: WorkspaceMembershipData, onBack: ()
                     ) {
                         if (wm.actions.shiftUpline) SmallButton(copy.t(Copy.RolesShiftUpline)) { selfAct = "shift" }
                         if (wm.actions.leaveUpline && hasUpline) SmallButton(copy.t(Copy.RolesLeaveUpline)) { selfAct = "leave" }
+                        if (m.isActive) SmallButton(copy.t(Copy.RolesLeaveRole)) { selfAct = "leaveRole" }
                     }
                 }
             }
@@ -762,6 +875,71 @@ private fun LeaveUplineForm(copy: Copy, membershipId: Long, upline: MembershipDa
                     return@launch
                 }
                 onDone(r.message.ifBlank { copy.t(Copy.RolesActDone) })
+            }
+        }
+    }
+}
+
+/**
+ * Leave the role entirely: ends the caller's own membership at once (the
+ * server completes a self-revoke inline and informs the old upline). After
+ * success the session is resynced so profile badges and role-gated UI drop
+ * the role immediately instead of waiting for the next notice or cold start.
+ */
+@Composable
+private fun LeaveRoleForm(copy: Copy, membershipId: Long, roleTitle: String, onDone: (String) -> Unit) {
+    var reason by rememberSaveable(membershipId) { mutableStateOf("") }
+    var error by remember(membershipId) { mutableStateOf("") }
+    var busy by remember(membershipId) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().padding(rdp(18))) {
+        XaniText(copy.t(Copy.RolesLeaveRole), Type.LabelBold, color = ProfileTokens.Danger, fontSizeOverride = 16f)
+        XaniText(
+            roleTitle,
+            Type.Caption,
+            color = ProfileTokens.Sub,
+            fontSizeOverride = 13f,
+            modifier = Modifier.padding(top = rdp(4)),
+        )
+        XaniText(
+            copy.t(Copy.RolesLeaveRoleHint),
+            Type.Caption,
+            color = ProfileTokens.Sub,
+            fontSizeOverride = 12f,
+            modifier = Modifier.padding(top = rdp(6), bottom = rdp(12)),
+        )
+        LightField(
+            value = reason,
+            onValueChange = { reason = it },
+            placeholder = copy.t(Copy.RolesReasonPlaceholder),
+            capitalization = KeyboardCapitalization.Sentences,
+            imeAction = ImeAction.Done,
+            maxChars = 300,
+        )
+        if (error.isNotEmpty()) {
+            XaniText(error, Type.Caption, color = ProfileTokens.Danger, fontSizeOverride = 12f, modifier = Modifier.padding(top = rdp(10)))
+        }
+        Spacer(Modifier.height(rdp(16)))
+        OutlineCta(copy.t(Copy.RolesLeaveRole), ProfileTokens.Danger, busy, !busy) {
+            if (reason.isBlank()) {
+                error = copy.t(Copy.RolesReasonRequired)
+                return@OutlineCta
+            }
+            busy = true
+            error = ""
+            scope.launch {
+                val r = runFeature(null as ApiResponse<RoleRequestData>?) { Xani.roles.revoke(membershipId, reason) }
+                busy = false
+                if (r == null || !r.ok) {
+                    error = r?.message ?: copy.t(Copy.RolesLoadFailed)
+                    return@launch
+                }
+                // The seat is gone: pull fresh authority so every role-gated
+                // surface (profile badges, buttons) follows right now.
+                runFeature(Unit) { Xani.session.resync() }
+                val left = r.data?.status == RoleRequestStatus.APPROVED
+                onDone(if (left) copy.t(Copy.RolesLeftRole) else r.message.ifBlank { copy.t(Copy.RolesActDone) })
             }
         }
     }
