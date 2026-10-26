@@ -391,6 +391,10 @@ data class RewardCampaignStatus(
     val delivery: String,
     val conditions: List<RewardCondition>,
     val pending: List<RewardPending>,
+    /** Today's business-day live time toward a daily target (e.g. the 3h in a
+     * QUALIFIED_DAYS rule) — 0 when the campaign has no such rule, not just
+     * when today is empty; see levels[0].thresholdMs for the target itself. */
+    val todayMs: Long,
 ) {
     /** All paid levels reached for this period: nothing more to earn until it rolls. */
     val complete: Boolean get() = nextThresholdMs <= 0L && eligible
@@ -416,6 +420,7 @@ data class RewardCampaignStatus(
             delivery = json.str("delivery", "direct"),
             conditions = json.objects("conditions").map(RewardCondition::from),
             pending = json.objects("pending").map(RewardPending::from),
+            todayMs = json.long("today_ms", 0L),
         )
     }
 }

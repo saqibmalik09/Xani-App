@@ -78,7 +78,8 @@ internal fun RewardEligibilityChip(copy: Copy, el: RewardEligibility?) {
         el.campaigns.all { it.complete } -> Color(0xFF16A34A) to copy.t(Copy.RewardsEligibleDone)
         else -> {
             val bad = whyNotCampaign(el)
-            Color(0xFFD97706) to copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)
+            val progress = bad?.let { qualifiedDaysProgress(copy, it) }
+            Color(0xFFD97706) to (progress ?: (copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)))
         }
     }
     Row(
@@ -112,6 +113,7 @@ internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long)
         // Nothing to earn right now: say why (cap reached, level not unlocked,
         // group off, …) instead of going silent — the host asked the screen.
         val bad = whyNotCampaign(el) ?: return null
+        qualifiedDaysProgress(copy, bad)?.let { return it }
         return copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)
     }
     val amt = "${next.nextAmount} ${next.nextAsset}"
@@ -218,6 +220,30 @@ internal fun RewardToastView(copy: Copy, t: RewardToast, modifier: Modifier = Mo
             if (sub.isNotEmpty()) XaniText(sub, Type.Micro, color = Color.White.copy(alpha = 0.75f), fontSizeOverride = 10.5f, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
+}
+
+/**
+ * "Valid days" campaigns (QUALIFIED_DAYS) are still open while the cycle
+ * runs — the only thing missing is more days like today, which is ongoing
+ * progress, not a rejection. Returns the progress line (days done, today's
+ * live time toward the daily target, the reward once days are met) only
+ * when QUALIFIED_DAYS is the sole thing holding the campaign back; null for
+ * every other reason (role, face, limits, …), which keep their existing
+ * "Not eligible" message untouched.
+ */
+private fun qualifiedDaysProgress(copy: Copy, c: RewardCampaignStatus): String? {
+    val failed = c.conditions.firstOrNull { !it.pass } ?: return null
+    if (failed.type != "QUALIFIED_DAYS") return null
+    val need = failed.required.toIntOrNull() ?: return null
+    val have = failed.actual.toIntOrNull() ?: 0
+    val target = c.levels.firstOrNull()?.thresholdMs?.takeIf { it > 0L } ?: return null
+    val today = c.todayMs.coerceIn(0L, target)
+    val left = target - today
+    val days = copy.t(Copy.RewardsQualifyingDays, "have" to have.toString(), "need" to need.toString())
+    val todayLine = if (left <= 0L) copy.t(Copy.RewardsQualifyingTodayDone)
+    else copy.t(Copy.RewardsQualifyingToday, "t" to fmtShort(today), "target" to fmtShort(target), "left" to fmtShort(left))
+    val reward = if (c.nextAmount > 0L) " · " + copy.t(Copy.RewardsQualifyingReward, "amt" to "${c.nextAmount} ${c.nextAsset}") else ""
+    return "$days · $todayLine$reward"
 }
 
 /** Prefer the first failed condition (type + required vs actual); else the reason code. */

@@ -567,6 +567,10 @@ class Copy(private val lang: String) {
         const val RewardsToastAdded = "rewards.toast_added"
         const val RewardsToastClaimable = "rewards.toast_claimable"
         const val RewardsToastPending = "rewards.toast_pending"
+        const val RewardsQualifyingDays = "rewards.qualifying_days"
+        const val RewardsQualifyingToday = "rewards.qualifying_today"
+        const val RewardsQualifyingTodayDone = "rewards.qualifying_today_done"
+        const val RewardsQualifyingReward = "rewards.qualifying_reward"
         const val RewardsLevels = "rewards.levels"
         const val RewardsConditions = "rewards.conditions"
         const val RewardsPendingWhy = "rewards.pending_why"
@@ -2057,6 +2061,10 @@ private val En = mapOf(
     Copy.RewardsToastAdded to "+{amt} added · {b} → {a}",
     Copy.RewardsToastClaimable to "+{amt} ready to claim",
     Copy.RewardsToastPending to "{amt} reached · checking",
+    Copy.RewardsQualifyingDays to "{have}/{need} valid days this cycle",
+    Copy.RewardsQualifyingToday to "Today: {t} of {target} live · {left} to a valid day",
+    Copy.RewardsQualifyingTodayDone to "Today's valid day reached ✓",
+    Copy.RewardsQualifyingReward to "{amt} once all valid days are met",
     Copy.RewardsLevels to "Levels",
     Copy.RewardsConditions to "Conditions",
     Copy.RewardsPendingWhy to "Reached {t}, waiting: {r}",
