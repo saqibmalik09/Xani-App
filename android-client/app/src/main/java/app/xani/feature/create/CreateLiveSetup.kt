@@ -156,7 +156,7 @@ internal fun CreateLiveFlow(
     val canGoVideo = broadcast == LiveBroadcast.Video && passwordOk
     val canNextAudio = audioReady && passwordOk
     // "Will this live earn rewards?" — asked per broadcast type, shown under the button.
-    val rewards = rememberRewardEligibility(isVideo = broadcast == LiveBroadcast.Video, live = false)
+    val rewards = rememberRewardEligibility(isVideo = broadcast == LiveBroadcast.Video, live = false).el
 
     fun buildConfig(isVideo: Boolean) = LiveRoomConfig(
         isVideo = isVideo,

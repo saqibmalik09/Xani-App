@@ -1,5 +1,6 @@
 package app.xani.feature.create
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,18 +36,31 @@ import app.xani.ui.theme.rdp
 import kotlinx.coroutines.delay
 
 /**
+ * Eligibility plus how long ago it was fetched (device clock, immune to wall
+ * clock changes). A value like today's accumulated live time is only true at
+ * the instant it was fetched — msSinceFetch lets a live HUD tick it forward
+ * for the seconds/minutes since, instead of freezing on a fetch that can be
+ * up to a minute stale while the host keeps streaming.
+ */
+internal data class RewardEligibilitySnapshot(val el: RewardEligibility?, val msSinceFetch: Long)
+
+/**
  * "Am I earning for this?" before and during a live. The setup form asks
  * the server once per broadcast type (audio/video); the HUD asks on entry,
  * again whenever a reward lands, and every minute so the "next reward in"
  * line never drifts far from the server's own projection.
  */
 @Composable
-internal fun rememberRewardEligibility(isVideo: Boolean, live: Boolean): RewardEligibility? {
+internal fun rememberRewardEligibility(isVideo: Boolean, live: Boolean): RewardEligibilitySnapshot {
     var el by remember { mutableStateOf<RewardEligibility?>(null) }
+    var fetchedAtMs by remember { mutableStateOf(0L) }
     var key by remember { mutableStateOf(0) }
     LaunchedEffect(isVideo, key) {
         val r = Xani.rewards.eligibility(role = "host", mode = if (isVideo) "video" else "audio")
-        r.value?.let { el = it }
+        r.value?.let {
+            el = it
+            fetchedAtMs = SystemClock.elapsedRealtime()
+        }
     }
     LaunchedEffect(live) {
         if (!live) return@LaunchedEffect
@@ -60,7 +74,11 @@ internal fun rememberRewardEligibility(isVideo: Boolean, live: Boolean): RewardE
             key++
         }
     }
-    return el
+    // Recomputed on every recomposition this is read from (the HUD recomposes
+    // every second on its own clock), so this is a live, ticking value — not
+    // just whatever was true the moment the network call returned.
+    val msSinceFetch = if (fetchedAtMs > 0L) (SystemClock.elapsedRealtime() - fetchedAtMs).coerceAtLeast(0L) else 0L
+    return RewardEligibilitySnapshot(el, msSinceFetch)
 }
 
 /** One line under the Go Live button: eligible (what / when) or why not. */
@@ -105,7 +123,7 @@ internal fun RewardEligibilityChip(copy: Copy, el: RewardEligibility?) {
  * HUD line beside the clock while live: "100 coins in 12:30" counting down
  * on the verified figure, or "100 coins earned" once the ledger says so.
  */
-internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long): String? {
+internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long, liveMsSinceFetch: Long = 0L): String? {
     el ?: return null
     if (!el.enabled) return null
     val next = el.next ?: run {
@@ -113,7 +131,7 @@ internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long)
         // Nothing to earn right now: say why (cap reached, level not unlocked,
         // group off, …) instead of going silent — the host asked the screen.
         val bad = whyNotCampaign(el) ?: return null
-        qualifiedDaysProgress(copy, bad)?.let { return it }
+        qualifiedDaysProgress(copy, bad, liveMsSinceFetch)?.let { return it }
         return copy.t(Copy.RewardsNotEligible) + " · " + notEligibleWhy(copy, bad)
     }
     val amt = "${next.nextAmount} ${next.nextAsset}"
@@ -230,18 +248,26 @@ internal fun RewardToastView(copy: Copy, t: RewardToast, modifier: Modifier = Mo
  * when QUALIFIED_DAYS is the sole thing holding the campaign back; null for
  * every other reason (role, face, limits, …), which keep their existing
  * "Not eligible" message untouched.
+ *
+ * liveMsSinceFetch (0 outside an active live, e.g. the pre-live chip) is
+ * added on top of the server's todayMs so the HUD counts up in real time
+ * between the ~minute-apart server refreshes, rather than showing a flat
+ * number that looks stuck while the host is actually still gaining time —
+ * the exact "did 2 min live, shows 0m" report this guards against. The next
+ * server refresh (reward landing or the periodic tick) replaces the estimate
+ * with the authoritative value, so the extrapolation never drifts for long.
  */
-private fun qualifiedDaysProgress(copy: Copy, c: RewardCampaignStatus): String? {
+private fun qualifiedDaysProgress(copy: Copy, c: RewardCampaignStatus, liveMsSinceFetch: Long = 0L): String? {
     val failed = c.conditions.firstOrNull { !it.pass } ?: return null
     if (failed.type != "QUALIFIED_DAYS") return null
     val need = failed.required.toIntOrNull() ?: return null
     val have = failed.actual.toIntOrNull() ?: 0
     val target = c.levels.firstOrNull()?.thresholdMs?.takeIf { it > 0L } ?: return null
-    val today = c.todayMs.coerceIn(0L, target)
+    val today = (c.todayMs + liveMsSinceFetch.coerceAtLeast(0L)).coerceIn(0L, target)
     val left = target - today
     val days = copy.t(Copy.RewardsQualifyingDays, "have" to have.toString(), "need" to need.toString())
     val todayLine = if (left <= 0L) copy.t(Copy.RewardsQualifyingTodayDone)
-    else copy.t(Copy.RewardsQualifyingToday, "t" to fmtShort(today), "target" to fmtShort(target), "left" to fmtShort(left))
+    else copy.t(Copy.RewardsQualifyingToday, "t" to fmtProgress(today), "target" to fmtShort(target), "left" to fmtProgress(left))
     val reward = if (c.nextAmount > 0L) " · " + copy.t(Copy.RewardsQualifyingReward, "amt" to "${c.nextAmount} ${c.nextAsset}") else ""
     return "$days · $todayLine$reward"
 }
@@ -310,6 +336,24 @@ private fun prettyVal(raw: String): String {
     if (s.isEmpty() || s == "null" || s == "[]") return ""
     if (s.startsWith("[")) s = s.removePrefix("[").removeSuffix("]")
     return s.split(',').map { it.trim().trim('"').trim('\'') }.filter { it.isNotEmpty() && it != "null" }.joinToString(", ")
+}
+
+/**
+ * "45s" / "2m" / "1h 30m" — like fmtShort but keeps seconds under a minute,
+ * so a few real minutes (or seconds) of fresh live progress never render as
+ * the same "0m" a campaign with zero progress would show.
+ */
+private fun fmtProgress(ms: Long): String {
+    val totalSec = (ms / 1000L).coerceAtLeast(0L)
+    val h = totalSec / 3600L
+    val m = (totalSec % 3600L) / 60L
+    val s = totalSec % 60L
+    return when {
+        h > 0L && m > 0L -> "${h}h ${m}m"
+        h > 0L -> "${h}h"
+        m > 0L -> "${m}m"
+        else -> "${s}s"
+    }
 }
 
 /** "30m" / "1h 30m" for thresholds. */
