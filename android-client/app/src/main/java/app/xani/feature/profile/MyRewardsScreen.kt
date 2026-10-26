@@ -39,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import app.xani.core.net.LiveFeed
 import app.xani.core.net.RewardAmounts
 import app.xani.core.net.RewardCalendar
+import app.xani.core.net.RewardCampaignStatus
 import app.xani.core.net.RewardClaimable
 import app.xani.core.net.RewardDayGroup
 import app.xani.core.net.RewardDetail
@@ -46,6 +47,8 @@ import app.xani.core.net.RewardLedger
 import app.xani.core.net.RewardSummary
 import app.xani.core.net.Xani
 import app.xani.feature.call.LiveSession
+import app.xani.feature.create.conditionSummary
+import app.xani.feature.create.fmtShort
 import app.xani.i18n.Copy
 import app.xani.ui.components.Spinner
 import app.xani.ui.components.XaniText
@@ -69,7 +72,13 @@ import java.util.UUID
  * same ledger row support reads, so what the host sees here is final.
  */
 @Composable
-internal fun MyRewardsScreen(copy: Copy, onBack: () -> Unit) {
+internal fun MyRewardsScreen(
+    copy: Copy,
+    onBack: () -> Unit,
+    onWithdraw: () -> Unit = {},
+    onTransfer: () -> Unit = {},
+    onExchange: () -> Unit = {},
+) {
     var range by remember { mutableStateOf("today") }
     var filter by remember { mutableStateOf("") }
     var summary by remember { mutableStateOf(RewardSummary.Empty) }
@@ -84,6 +93,10 @@ internal fun MyRewardsScreen(copy: Copy, onBack: () -> Unit) {
     var key by remember { mutableIntStateOf(0) }
     var detailId by remember { mutableStateOf(0L) }
     var toast by remember { mutableStateOf("") }
+    // The running campaigns and where this host stands on each: criteria
+    // reached vs remaining, straight from the same projection the live HUD
+    // reads — never computed on the phone.
+    var campaigns by remember { mutableStateOf<List<RewardCampaignStatus>>(emptyList()) }
 
     // One coroutine per (range, filter, refresh): header and first page together.
     LaunchedEffect(range, filter, key) {
@@ -139,6 +152,12 @@ internal fun MyRewardsScreen(copy: Copy, onBack: () -> Unit) {
         if (toast.isEmpty()) return@LaunchedEffect
         delay(3_500)
         toast = ""
+    }
+    // Campaign standing refreshes with the same key the ledger uses, so a
+    // reward landing updates the criteria list too.
+    LaunchedEffect(key) {
+        val r = Xani.rewards.eligibility(role = "host", mode = "video")
+        r.value?.let { campaigns = it.campaigns }
     }
 
     var moreKey by remember { mutableIntStateOf(0) }
@@ -230,6 +249,14 @@ internal fun MyRewardsScreen(copy: Copy, onBack: () -> Unit) {
                 item(key = "hero") {
                     HeroCard(copy = copy, summary = summary, enabled = enabled)
                 }
+                item(key = "actions") {
+                    Spacer(Modifier.height(rdp(8)))
+                    Row(horizontalArrangement = Arrangement.spacedBy(rdp(8))) {
+                        QuickAction(copy.t(Copy.BalanceWithdraw), Modifier.weight(1f), onWithdraw)
+                        QuickAction(copy.t(Copy.TransferTitle), Modifier.weight(1f), onTransfer)
+                        QuickAction(copy.t(Copy.ExchangeTitle), Modifier.weight(1f), onExchange)
+                    }
+                }
                 if (claimable.any { it.amount > 0L || it.waitingAmount > 0L }) {
                     item(key = "claim") {
                         Spacer(Modifier.height(rdp(10)))
@@ -246,6 +273,16 @@ internal fun MyRewardsScreen(copy: Copy, onBack: () -> Unit) {
                                 onError = { error = it },
                             )
                         }
+                    }
+                }
+                if (campaigns.isNotEmpty()) {
+                    item(key = "campaigns-h") {
+                        Spacer(Modifier.height(rdp(18)))
+                        XaniText(copy.t(Copy.RewardsCampaigns), Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 15f, modifier = Modifier.padding(start = rdp(4)))
+                        Spacer(Modifier.height(rdp(8)))
+                    }
+                    campaigns.forEach { c ->
+                        item(key = "camp-${c.campaignId}") { CampaignCard(copy, c) }
                     }
                 }
                 if (error.isNotEmpty()) {
@@ -393,6 +430,59 @@ private fun HeroCard(copy: Copy, summary: RewardSummary, enabled: Boolean) {
         if (sub.isNotEmpty()) {
             Spacer(Modifier.height(rdp(6)))
             XaniText(sub.joinToString(" · "), Type.Micro, color = Color.White.copy(alpha = 0.85f), fontSizeOverride = 11f, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** Withdraw / Transfer / Exchange — the places reward money goes next. */
+@Composable
+private fun QuickAction(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.clip(RoundedCornerShape(rdp(12))).background(ProfileTokens.Bg2).pressable(onClick = onClick).padding(vertical = rdp(10)),
+        contentAlignment = Alignment.Center,
+    ) { XaniText(label, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 12.5f, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+}
+
+/**
+ * One campaign and where the host stands: an Eligible / In progress pill,
+ * each criterion marked reached (green) or still remaining (amber) with the
+ * server's required-vs-actual, then what it pays next. All figures are the
+ * server's own projection — the same one the live HUD explains.
+ */
+@Composable
+private fun CampaignCard(copy: Copy, c: RewardCampaignStatus) {
+    Column(
+        Modifier.fillMaxWidth().padding(bottom = rdp(6)).clip(RoundedCornerShape(rdp(14)))
+            .background(ProfileTokens.Bg2).padding(horizontal = rdp(14), vertical = rdp(12)),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            XaniText(c.campaign, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 13.5f, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(rdp(8)))
+            val (bg, fg, label) =
+                if (c.eligible) Triple(Color(0x1416A34A), Color(0xFF15803D), Copy.RewardsCampaignEligible)
+                else Triple(Color(0x14F59E0B), Color(0xFFB45309), Copy.RewardsCampaignProgress)
+            Box(Modifier.clip(RoundedCornerShape(rdp(8))).background(bg).padding(horizontal = rdp(7), vertical = rdp(2))) {
+                XaniText(copy.t(label), Type.Micro, color = fg, fontSizeOverride = 10f)
+            }
+        }
+        c.conditions.forEach { cond ->
+            Spacer(Modifier.height(rdp(5)))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(rdp(6)).clip(CircleShape).background(if (cond.pass) Color(0xFF16A34A) else Color(0xFFD97706)))
+                Spacer(Modifier.width(rdp(8)))
+                XaniText(
+                    conditionSummary(cond), Type.Caption,
+                    color = if (cond.pass) ProfileTokens.Sub else Color(0xFFB45309),
+                    fontSizeOverride = 11.5f, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (c.nextAmount > 0L && c.nextThresholdMs > 0L) {
+            Spacer(Modifier.height(rdp(7)))
+            XaniText(
+                copy.t(Copy.RewardsEligibleNext, "amt" to fmtAmount(c.nextAsset, c.nextAmount), "t" to fmtShort(c.nextThresholdMs)),
+                Type.Micro, color = ProfileTokens.Muted, fontSizeOverride = 10.5f,
+            )
         }
     }
 }

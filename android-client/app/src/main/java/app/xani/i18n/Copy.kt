@@ -567,6 +567,9 @@ class Copy(private val lang: String) {
         const val RewardsToastAdded = "rewards.toast_added"
         const val RewardsToastClaimable = "rewards.toast_claimable"
         const val RewardsToastPending = "rewards.toast_pending"
+        const val RewardsCampaigns = "rewards.campaigns"
+        const val RewardsCampaignEligible = "rewards.campaign_eligible"
+        const val RewardsCampaignProgress = "rewards.campaign_progress"
         const val RewardsQualifyingPolicy = "rewards.qualifying_policy"
         const val RewardsQualifyingReward = "rewards.qualifying_reward"
         const val RewardsLevels = "rewards.levels"
@@ -2059,6 +2062,9 @@ private val En = mapOf(
     Copy.RewardsToastAdded to "+{amt} added · {b} → {a}",
     Copy.RewardsToastClaimable to "+{amt} ready to claim",
     Copy.RewardsToastPending to "{amt} reached · checking",
+    Copy.RewardsCampaigns to "Live reward campaigns",
+    Copy.RewardsCampaignEligible to "Eligible",
+    Copy.RewardsCampaignProgress to "In progress",
     Copy.RewardsQualifyingPolicy to "Go live {target} a day · {need} valid days this cycle",
     Copy.RewardsQualifyingReward to "{amt} once all valid days are met",
     Copy.RewardsLevels to "Levels",

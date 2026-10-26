@@ -247,7 +247,7 @@ private fun notEligibleWhy(copy: Copy, c: RewardCampaignStatus?): String {
     val failed = c.conditions.firstOrNull { !it.pass }
     if (failed != null) {
         if (failed.type == "FACE_VERIFIED") return copy.t(Copy.RewardsNotEligibleFace)
-        return copy.t(Copy.RewardsNotEligibleNeed, "which" to failedConditionWhich(failed))
+        return copy.t(Copy.RewardsNotEligibleNeed, "which" to conditionSummary(failed))
     }
     return when (c.reason) {
         "ROLE_NOT_ALLOWED", "MODE_NOT_ALLOWED" -> copy.t(Copy.RewardsNotEligibleRole)
@@ -275,8 +275,12 @@ private fun notEligibleWhy(copy: Copy, c: RewardCampaignStatus?): String {
     }
 }
 
-/** "platform role host (yours: moderator)" — short enough for the chip. */
-private fun failedConditionWhich(c: RewardCondition): String {
+/**
+ * "platform role host (yours: moderator)" — one condition as a short line.
+ * Also used by My Rewards' campaign list, where a passed condition renders
+ * as just "label value" (the "yours:" part is dropped when they match).
+ */
+internal fun conditionSummary(c: RewardCondition): String {
     val need = prettyVal(c.required)
     val have = prettyVal(c.actual)
     val label = when (c.type) {
