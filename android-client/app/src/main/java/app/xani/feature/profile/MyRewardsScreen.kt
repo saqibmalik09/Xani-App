@@ -49,6 +49,7 @@ import app.xani.core.net.Xani
 import app.xani.feature.call.LiveSession
 import app.xani.feature.create.conditionSummary
 import app.xani.feature.create.fmtShort
+import app.xani.feature.create.roleMatches
 import app.xani.i18n.Copy
 import app.xani.ui.components.Spinner
 import app.xani.ui.components.XaniText
@@ -154,10 +155,12 @@ internal fun MyRewardsScreen(
         toast = ""
     }
     // Campaign standing refreshes with the same key the ledger uses, so a
-    // reward landing updates the criteria list too.
+    // reward landing updates the criteria list too. Only campaigns whose
+    // role rules match this account are kept — someone else's campaign
+    // shown as "not eligible" reads as a problem, not information.
     LaunchedEffect(key) {
         val r = Xani.rewards.eligibility(role = "host", mode = "video")
-        r.value?.let { campaigns = it.campaigns }
+        r.value?.let { campaigns = it.campaigns.filter { c -> c.roleMatches() } }
     }
 
     var moreKey by remember { mutableIntStateOf(0) }

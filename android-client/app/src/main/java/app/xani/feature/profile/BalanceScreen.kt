@@ -57,6 +57,8 @@ internal fun BalanceScreen(
     onRecharge: () -> Unit,
     onWithdraw: () -> Unit,
     onHistory: () -> Unit,
+    onTransfer: () -> Unit = {},
+    onExchange: () -> Unit = {},
 ) {
     var home by remember { mutableStateOf<RechargeHomeData?>(null) }
     var recent by remember { mutableStateOf<List<RechargeRequestData>>(emptyList()) }
@@ -160,6 +162,15 @@ internal fun BalanceScreen(
                     }
                     ActionTile(copy.t(Copy.BalanceHistory), Modifier.weight(1f), onHistory) {
                         ProfileIco.History(ProfileTokens.Text, rdp(19))
+                    }
+                }
+                Spacer(Modifier.height(rdp(10)))
+                Row(horizontalArrangement = Arrangement.spacedBy(rdp(10))) {
+                    ActionTile(copy.t(Copy.TransferTitle), Modifier.weight(1f), onTransfer) {
+                        ProfileIco.Path("M4 7h12m0 0l-3-3m3 3l-3 3M20 17H8m0 0l3 3m-3-3l3-3", ProfileTokens.Text)
+                    }
+                    ActionTile(copy.t(Copy.ExchangeTitle), Modifier.weight(1f), onExchange) {
+                        ProfileIco.Path("M4 4v6h6M20 20v-6h-6M20 10A8 8 0 0 0 6.3 6.3M4 14a8 8 0 0 0 13.7 3.7", ProfileTokens.Text)
                     }
                 }
 

@@ -127,6 +127,15 @@ internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long)
 }
 
 /**
+ * This campaign's role rules fit the account: neither the server reason nor
+ * a failing USER_ROLE/LIVE_ROLE leaf says "wrong role". Shared by the chip's
+ * campaign picker and My Rewards' campaign list — a Star-host-only campaign
+ * on a plain host account is noise, not status.
+ */
+internal fun RewardCampaignStatus.roleMatches(): Boolean =
+    reason != "USER_ROLE" && conditions.none { !it.pass && (it.type == "USER_ROLE" || it.type == "LIVE_ROLE") }
+
+/**
  * The ineligible campaign this user actually belongs to. Campaigns are
  * independent (a Star host and a Host/Agency account can each run their own),
  * so when several are ineligible the one worth explaining is the one whose
@@ -137,10 +146,7 @@ internal fun rewardHudText(copy: Copy, el: RewardEligibility?, verifiedMs: Long)
  */
 private fun whyNotCampaign(el: RewardEligibility): RewardCampaignStatus? {
     val bad = el.campaigns.filter { !it.eligible }
-    return bad.firstOrNull { c ->
-        c.reason != "USER_ROLE" &&
-            c.conditions.none { !it.pass && (it.type == "USER_ROLE" || it.type == "LIVE_ROLE") }
-    } ?: bad.firstOrNull()
+    return bad.firstOrNull { it.roleMatches() } ?: bad.firstOrNull()
 }
 
 /** The campaign is held back only by the FACE_VERIFIED rule (server reason or the failed leaf). */
