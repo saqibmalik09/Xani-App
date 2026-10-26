@@ -532,7 +532,6 @@ fun ProfileScreen(
             ProfileRoute.MyRewards -> MyRewardsScreen(
                 copy = copy,
                 onBack = { route = ProfileRoute.Home },
-                onWithdraw = { route = ProfileRoute.Withdraw },
             )
             ProfileRoute.Recharge -> RechargeScreen(
                 copy = copy,

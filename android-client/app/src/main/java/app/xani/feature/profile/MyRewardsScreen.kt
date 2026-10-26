@@ -76,9 +76,6 @@ import java.util.UUID
 internal fun MyRewardsScreen(
     copy: Copy,
     onBack: () -> Unit,
-    onWithdraw: () -> Unit = {},
-    onTransfer: () -> Unit = {},
-    onExchange: () -> Unit = {},
 ) {
     var range by remember { mutableStateOf("today") }
     var filter by remember { mutableStateOf("") }
@@ -251,14 +248,6 @@ internal fun MyRewardsScreen(
             ) {
                 item(key = "hero") {
                     HeroCard(copy = copy, summary = summary, enabled = enabled)
-                }
-                item(key = "actions") {
-                    Spacer(Modifier.height(rdp(8)))
-                    Row(horizontalArrangement = Arrangement.spacedBy(rdp(8))) {
-                        QuickAction(copy.t(Copy.BalanceWithdraw), Modifier.weight(1f), onWithdraw)
-                        QuickAction(copy.t(Copy.TransferTitle), Modifier.weight(1f), onTransfer)
-                        QuickAction(copy.t(Copy.ExchangeTitle), Modifier.weight(1f), onExchange)
-                    }
                 }
                 if (claimable.any { it.amount > 0L || it.waitingAmount > 0L }) {
                     item(key = "claim") {
@@ -435,15 +424,6 @@ private fun HeroCard(copy: Copy, summary: RewardSummary, enabled: Boolean) {
             XaniText(sub.joinToString(" · "), Type.Micro, color = Color.White.copy(alpha = 0.85f), fontSizeOverride = 11f, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
-}
-
-/** Withdraw / Transfer / Exchange — the places reward money goes next. */
-@Composable
-private fun QuickAction(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.clip(RoundedCornerShape(rdp(12))).background(ProfileTokens.Bg2).pressable(onClick = onClick).padding(vertical = rdp(10)),
-        contentAlignment = Alignment.Center,
-    ) { XaniText(label, Type.LabelBold, color = ProfileTokens.Text, fontSizeOverride = 12.5f, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 /**
