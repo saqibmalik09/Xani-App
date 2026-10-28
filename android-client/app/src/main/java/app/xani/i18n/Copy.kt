@@ -123,6 +123,7 @@ class Copy(private val lang: String) {
         const val LiveGiftNotEnoughTitle = "live.gift_not_enough_title"
         const val LiveGiftNotEnoughBody = "live.gift_not_enough_body"
         const val LiveGiftNotEnoughMultiBody = "live.gift_not_enough_multi_body"
+        const val LiveGiftNotEnoughQtyBody = "live.gift_not_enough_qty_body"
         const val LiveGiftRecipients = "live.gift_recipients"
         const val LiveGiftToOthers = "live.gift_to_others"
         const val LiveGiftFailed = "live.gift_failed"
@@ -130,6 +131,8 @@ class Copy(private val lang: String) {
         const val LiveGiftDismiss = "live.gift_dismiss"
         const val LiveGiftRetry = "live.gift_retry"
         const val LiveGiftTooFast = "live.gift_too_fast"
+        const val LiveGiftTooMany = "live.gift_too_many"
+        const val LiveGiftQtyCustom = "live.gift_qty_custom"
         const val LiveChatSend = "live.chat_send"
         const val LiveGiftEmpty = "live.gift_empty"
         const val LiveGiftLoading = "live.gift_loading"
@@ -1631,6 +1634,7 @@ private val En = mapOf(
     Copy.LiveGiftNotEnoughTitle to "Insufficient balance",
     Copy.LiveGiftNotEnoughBody to "{gift} costs {price} coins and you have {coins}. Recharge to keep the party going.",
     Copy.LiveGiftNotEnoughMultiBody to "{gift} for {n} people needs {required} coins and you have {coins}. Recharge or pick fewer people.",
+    Copy.LiveGiftNotEnoughQtyBody to "{gift} ×{count} needs {required} coins and you have {coins}. Recharge or send fewer.",
     Copy.LiveGiftRecipients to "{n} people",
     Copy.LiveGiftToOthers to "{to} +{n}",
     Copy.LiveGiftFailed to "Could not send the gift. Try again.",
@@ -1638,6 +1642,8 @@ private val En = mapOf(
     Copy.LiveGiftDismiss to "Not now",
     Copy.LiveGiftRetry to "Try again",
     Copy.LiveGiftTooFast to "You are sending very fast. Take a breath and try again.",
+    Copy.LiveGiftTooMany to "That is too many to send at once. Pick a smaller amount.",
+    Copy.LiveGiftQtyCustom to "Custom",
     Copy.LiveChatSend to "Send",
     Copy.LiveGiftEmpty to "No gifts yet.",
     Copy.LiveGiftLoading to "Loading gifts…",

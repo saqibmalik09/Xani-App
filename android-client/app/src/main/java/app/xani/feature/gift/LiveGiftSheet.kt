@@ -31,6 +31,9 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -48,12 +51,16 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.xani.core.isolate.runFeature
 import app.xani.core.media.RemoteImage
 import app.xani.core.net.GiftCategoryNode
@@ -155,6 +162,20 @@ internal fun LiveGiftSheet(
         }
     }
     val leaves: List<GiftLeafData> = remember(roots) { roots.flatMap { it.allGifts } }
+    // Where each gift lives (its tab, its sub-tab) and whether it is lucky —
+    // lucky inherits down the tree the same way the grid draws it, so a lucky
+    // gift inside a sub-category combos too (a top-level-only lookup here
+    // sent those with combo 1 and the sender never saw a counter).
+    val giftHomes: Map<Long, GiftHome> = remember(roots) {
+        val m = HashMap<Long, GiftHome>()
+        fun walk(node: GiftCategoryNode, rootId: Long, subId: Long, luckyAbove: Boolean) {
+            val lucky = luckyAbove || node.lucky
+            node.gifts.forEach { leaf -> m.putIfAbsent(leaf.id, GiftHome(rootId, subId, lucky || leaf.gift.lucky)) }
+            node.children.forEach { walk(it, rootId, if (subId == 0L) it.id else subId, lucky) }
+        }
+        roots.forEach { walk(it, it.id, 0L, false) }
+        m
+    }
     // A refusal is a modal over the sheet, never a line inside it.
     var dialog by remember { mutableStateOf<GiftDialog?>(null) }
 
@@ -166,6 +187,16 @@ internal fun LiveGiftSheet(
     var combo by remember { mutableIntStateOf(0) }
     val comboRing = remember { Animatable(0f) }
     var comboGift by remember { mutableLongStateOf(0L) }
+    // How many of the selected gift one tap sends (bundled in one request,
+    // priced as unit × qty — same split proportions as a single gift). Lucky
+    // gifts ignore this and always send one at a time (the combo streak is
+    // its own multiplier); the picker is hidden for them.
+    var qty by remember { mutableIntStateOf(1) }
+    var qtyOpen by remember { mutableStateOf(false) }
+    var qtyCustom by remember { mutableStateOf("") }
+    // What the last tap actually sent, for the error path: a server refusal
+    // arrives after this sheet's qty state may have moved on.
+    var lastQty by remember { mutableIntStateOf(1) }
     // Off-screen while what was just sent plays; state (selection, combo) stays.
     var hidden by remember { mutableStateOf(false) }
     var hiddenAt by remember { mutableLongStateOf(0L) }
@@ -226,6 +257,15 @@ internal fun LiveGiftSheet(
     // tree (or the flat catalog) is here; keep the selection across reloads.
     LaunchedEffect(roots) {
         if (roots.isEmpty()) return@LaunchedEffect
+        // The rule tree landing mid-streak (it reads ~1 s after the flat
+        // catalog) must not break the combo: keep the gift selected and
+        // follow it to its tab if the tabs moved, so the counter stays put.
+        val home = giftHomes[selectedId]
+        if (combo > 0 && home != null && leaves.firstOrNull { it.id == selectedId }?.state?.allowed == true) {
+            val tab = roots.firstOrNull { it.id == categoryId }
+            if (tab == null || tab.allGifts.none { it.id == selectedId }) { categoryId = home.rootId; subId = home.subId }
+            return@LaunchedEffect
+        }
         if (roots.none { it.id == categoryId }) { categoryId = roots[0].id; subId = 0L }
         val root = roots.first { it.id == categoryId }
         if (subId != 0L && root.children.none { it.id == subId }) subId = 0L
@@ -257,9 +297,17 @@ internal fun LiveGiftSheet(
                         // The server's word on the balance beats ours: re-read it.
                         ProfileStore.refresh()
                         val n = selectedIds.size.coerceAtLeast(1)
-                        GiftDialog.NotEnough(g?.title ?: "", g?.coinPrice ?: 0L, (g?.coinPrice ?: 0L) * n, n)
+                        GiftDialog.NotEnough(g?.title ?: "", g?.coinPrice ?: 0L, (g?.coinPrice ?: 0L) * n * lastQty, n, lastQty)
                     }
                     f.code == "too_fast" -> GiftDialog.Failed(copy.t(Copy.LiveGiftTooFast), retry = true)
+                    // The quantity picker let through more than the server
+                    // allows right now; retrying the same count would just
+                    // fail again, so this one has no retry button.
+                    f.code == "invalid_count" -> {
+                        qty = 1
+                        qtyCustom = ""
+                        GiftDialog.Failed(f.message.ifBlank { copy.t(Copy.LiveGiftTooMany) }, retry = false)
+                    }
                     // A rule said no (gift_<REASON>): the message is the rule's
                     // own English; the tree is re-read so the lock shows too.
                     f.code.startsWith("gift_") -> {
@@ -283,13 +331,16 @@ internal fun LiveGiftSheet(
     val selected = selectedLeaf?.gift
     // Lucky is the category's flag from the dashboard (the server folds it into
     // the gift too). Only a lucky gift combos; everything else sends once.
-    val selectedLucky = remember(selected, roots) {
+    val selectedLucky = remember(selected, giftHomes) {
         val g = selected
-        g != null && (g.lucky || roots.firstOrNull { it.id == g.categoryId }?.lucky == true)
+        g != null && (g.lucky || giftHomes[g.id]?.lucky == true)
     }
     // Reads the snapshot's exact number: a recharge landing on the wallet
     // stream recomposes this sheet, so the pill moves without reopening.
     val coins = (profile.coinsValue - pendingTotal).coerceAtLeast(0L)
+    // The quantity multiplier for a normal send; a lucky streak always sends
+    // one at a time so the combo counter and ring stay meaningful.
+    val effectiveQty = if (selectedLucky) 1 else qty.coerceIn(1, GIFT_QTY_MAX)
 
     fun send() {
         val g = selected ?: return
@@ -303,20 +354,24 @@ internal fun LiveGiftSheet(
             dialog = GiftDialog.Locked(it.text.ifBlank { copy.t(Copy.LiveGiftLockedTitle) })
             return
         }
-        // Every selected person gets their own copy: the tap costs the sum.
+        qtyOpen = false
+        val sendQty = effectiveQty
+        lastQty = sendQty
+        // Every selected person gets their own copy, and each copy is for
+        // sendQty of the gift: the tap costs price × people × qty.
         val price = g.coinPrice
-        val required = price * targets.size
+        val required = price * targets.size * sendQty
         // Refuse locally only on a balance the server has actually told us.
         // An unknown balance goes to the ledger, which is the only judge.
         if (ProfileStore.balanceKnown && coins < required) {
             combo = 0
             hidden = false
-            dialog = GiftDialog.NotEnough(g.title, price, required, targets.size)
+            dialog = GiftDialog.NotEnough(g.title, price, required, targets.size, sendQty)
             return
         }
         val lucky = selectedLucky
         val next = if (lucky && combo > 0 && comboGift == g.id) combo + 1 else 1
-        val clientId = LiveSession.sendGift(g, targets, combo = next) ?: return
+        val clientId = LiveSession.sendGift(g, targets, combo = next, count = sendQty) ?: return
         pending[clientId] = required
         pendingTotal += required
         // Out of the way: the sender sees the gift land like everyone else.
@@ -381,6 +436,7 @@ internal fun LiveGiftSheet(
                                 subId = 0L
                                 selectedId = c.allGifts.firstOrNull { it.state.allowed }?.id ?: 0L
                                 combo = 0
+                                qty = 1; qtyOpen = false; qtyCustom = ""
                             }),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -422,6 +478,7 @@ internal fun LiveGiftSheet(
                                     val node = c ?: root
                                     selectedId = node.allGifts.firstOrNull { it.state.allowed }?.id ?: 0L
                                     combo = 0
+                                    qty = 1; qtyOpen = false; qtyCustom = ""
                                 })
                                 .padding(horizontal = rdp(10), vertical = rdp(5)),
                         ) {
@@ -465,7 +522,13 @@ internal fun LiveGiftSheet(
                                         !leaf.state.allowed -> dialog = GiftDialog.Locked(leaf.state.text.ifBlank { copy.t(Copy.LiveGiftLockedTitle) })
                                         // A lucky gift already selected: the cell is a send button too.
                                         selectedId == g.id && luckyCell && combo > 0 -> send()
-                                        else -> { selectedId = g.id; combo = 0 }
+                                        else -> {
+                                            // Only a real change of gift drops the chosen quantity —
+                                            // re-tapping what is already selected keeps it.
+                                            if (selectedId != g.id) { qty = 1; qtyOpen = false; qtyCustom = "" }
+                                            selectedId = g.id
+                                            combo = 0
+                                        }
                                     }
                                 },
                             )
@@ -475,6 +538,24 @@ internal fun LiveGiftSheet(
             }
 
             Spacer(Modifier.height(rdp(8)))
+
+            // Quantity picker: presets + a custom field, opened from the ×N
+            // chip in the bottom bar. Picking a preset sends right away;
+            // typing a custom number waits for Done/the chip to close.
+            if (qtyOpen && !selectedLucky) {
+                QtyRow(
+                    qty = qty,
+                    custom = qtyCustom,
+                    onPreset = { qty = it; qtyCustom = ""; qtyOpen = false },
+                    onCustom = { text ->
+                        val digits = text.filter(Char::isDigit).take(4)
+                        qtyCustom = digits
+                        digits.toIntOrNull()?.let { n -> qty = n.coerceIn(1, GIFT_QTY_MAX) }
+                    },
+                    onDone = { qtyOpen = false },
+                    placeholder = copy.t(Copy.LiveGiftQtyCustom),
+                )
+            }
 
             // Bottom bar: coins (left) · Send / combo (right)
             Row(
@@ -516,11 +597,27 @@ internal fun LiveGiftSheet(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(rdp(4))) {
                             CoinGlyph(rdp(11))
                             XaniText(
-                                formatCoins(selected.coinPrice * selectedIds.size),
+                                formatCoins(selected.coinPrice * selectedIds.size * effectiveQty),
                                 Type.LabelBold, color = Color(0xFFFDE68A), fontSizeOverride = 12f,
                             )
                         }
                     }
+                }
+                // How many of this gift one tap sends. Lucky gifts combo
+                // instead (every tap sends one, counting up), so the chip is
+                // hidden for them — the picker's choice would otherwise fight
+                // the streak's own counter.
+                if (!selectedLucky && selected != null) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(rdp(14)))
+                            .background(if (qtyOpen) Color(0x338B5CF6) else Color.White.copy(alpha = 0.08f))
+                            .pressable(pressedScale = 0.95f, onClick = { qtyOpen = !qtyOpen })
+                            .padding(horizontal = rdp(11), vertical = rdp(8)),
+                    ) {
+                        XaniText("×$qty", Type.LabelBold, color = Color.White, fontSizeOverride = 13f)
+                    }
+                    Spacer(Modifier.width(rdp(8)))
                 }
                 if (selectedLucky && combo > 0 && selected != null && comboGift == selected.id) {
                     ComboButton(combo, { comboRing.value }, copy, onTap = ::send)
@@ -574,13 +671,72 @@ internal fun LiveGiftSheet(
 }
 
 /** How long the sheet waits for the lane to pick up the send, and how long it hides at most. */
+/** A gift's place in the tree: top tab, sub tab (0 = none) and inherited lucky flag. */
+private data class GiftHome(val rootId: Long, val subId: Long, val lucky: Boolean)
+
 private const val HIDDEN_MIN_MS = 350L
 private const val HIDDEN_MAX_MS = 8_000L
 
+/** Quantity presets offered in the ×N picker; custom input is clamped to this ceiling. */
+private val GIFT_QTY_PRESETS = listOf(5, 10, 33, 50, 100)
+private const val GIFT_QTY_MAX = 1000
+
+/** Preset pills + a custom numeric field, for how many of one gift to send at once. */
+@Composable
+private fun QtyRow(qty: Int, custom: String, onPreset: (Int) -> Unit, onCustom: (String) -> Unit, onDone: () -> Unit, placeholder: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = rdp(14), vertical = rdp(6))
+            .then(LocalLiveSheetDrag.current),
+        horizontalArrangement = Arrangement.spacedBy(rdp(6)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        GIFT_QTY_PRESETS.forEach { preset ->
+            val on = qty == preset && custom.isEmpty()
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(rdp(12)))
+                    .background(if (on) Color(0x338B5CF6) else Color.White.copy(alpha = 0.06f))
+                    .then(if (on) Modifier.border(1.dp, Color(0xFFA78BFA), RoundedCornerShape(rdp(12))) else Modifier)
+                    .pressable(pressedScale = 0.95f, onClick = { onPreset(preset) })
+                    .padding(horizontal = rdp(11), vertical = rdp(7)),
+            ) {
+                XaniText("×$preset", Type.LabelBold, color = Color.White, fontSizeOverride = 12f)
+            }
+        }
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(rdp(12)))
+                .background(if (custom.isNotEmpty()) Color(0x338B5CF6) else Color.White.copy(alpha = 0.06f))
+                .padding(horizontal = rdp(10), vertical = rdp(6)),
+        ) {
+            BasicTextField(
+                value = custom,
+                onValueChange = onCustom,
+                singleLine = true,
+                textStyle = Type.LabelBold.copy(color = Color.White, fontSize = 13.sp),
+                cursorBrush = SolidColor(Color.White),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onDone() }),
+                modifier = Modifier.width(rdp(42)),
+                decorationBox = { inner ->
+                    Box {
+                        if (custom.isEmpty()) {
+                            XaniText(placeholder, Type.LabelBold, color = Color.White.copy(alpha = 0.4f), fontSizeOverride = 12f)
+                        }
+                        inner()
+                    }
+                },
+            )
+        }
+    }
+}
+
 /** What the sheet has to say when a send does not go through. */
 private sealed interface GiftDialog {
-    /** [required] is the whole tap ([price] × [people]); the body names the gap. */
-    data class NotEnough(val gift: String, val price: Long, val required: Long, val people: Int) : GiftDialog
+    /** [required] is the whole tap ([price] × [people] × [count]); the body names the gap. */
+    data class NotEnough(val gift: String, val price: Long, val required: Long, val people: Int, val count: Int = 1) : GiftDialog
     data class Failed(val message: String, val retry: Boolean) : GiftDialog
     /** A rule says this gift cannot be sent here and now; [message] is the rule's English. */
     data class Locked(val message: String) : GiftDialog
@@ -662,18 +818,25 @@ private fun GiftModal(
             Spacer(Modifier.height(rdp(8)))
             XaniText(
                 when (d) {
-                    // Several people picked: the body names the whole tap's
-                    // price against what is in the wallet — required vs there.
-                    is GiftDialog.NotEnough -> if (d.people > 1) {
-                        copy.t(
+                    // Several people picked, or several of the gift at once:
+                    // the body names the whole tap's price against the
+                    // wallet — required vs there — rather than one unit.
+                    is GiftDialog.NotEnough -> when {
+                        d.people > 1 -> copy.t(
                             Copy.LiveGiftNotEnoughMultiBody,
                             "gift" to d.gift.ifBlank { copy.t(Copy.LiveGiftsTitle).lowercase(Locale.getDefault()) },
                             "n" to d.people.toString(),
                             "required" to formatCoins(d.required),
                             "coins" to formatCoins(coins),
                         )
-                    } else {
-                        copy.t(
+                        d.count > 1 -> copy.t(
+                            Copy.LiveGiftNotEnoughQtyBody,
+                            "gift" to d.gift.ifBlank { copy.t(Copy.LiveGiftsTitle).lowercase(Locale.getDefault()) },
+                            "count" to d.count.toString(),
+                            "required" to formatCoins(d.required),
+                            "coins" to formatCoins(coins),
+                        )
+                        else -> copy.t(
                             Copy.LiveGiftNotEnoughBody,
                             "price" to formatCoins(d.price),
                             "coins" to formatCoins(coins),
