@@ -54,7 +54,7 @@ internal fun rememberGiftLuckyToasts(): GiftingUserEvent? {
     }
     LaunchedEffect(current) {
         current ?: return@LaunchedEffect
-        delay(4_500)
+        delay(2_500)
         current = queue.removeFirstOrNull()
     }
     return current
