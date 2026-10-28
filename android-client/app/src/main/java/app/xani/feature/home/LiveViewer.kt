@@ -97,6 +97,7 @@ import app.xani.feature.games.LiveGamesOverlay
 import app.xani.feature.games.rememberLiveGamesState
 import app.xani.feature.gift.CardTabs
 import app.xani.feature.gift.EntranceOverlay
+import app.xani.feature.gift.GiftLuckyToastView
 import app.xani.feature.gift.GameWinOverlay
 import app.xani.feature.gift.GiftOverlay
 import app.xani.feature.gift.GiftingPanel
@@ -105,6 +106,7 @@ import app.xani.feature.gift.LiveStickerSheet
 import app.xani.feature.gift.StickerMark
 import app.xani.feature.call.LiveChatLine
 import app.xani.feature.gift.formatCoins
+import app.xani.feature.gift.rememberGiftLuckyToasts
 import app.xani.feature.gift.rememberGiftOverlayState
 import app.xani.feature.main.GamesMark
 import app.xani.feature.social.FollowStore
@@ -156,6 +158,7 @@ internal fun LiveViewerScreen(
     var giftSheet by remember { mutableStateOf(false) }
     var stickerSheet by remember { mutableStateOf(false) }
     val giftOverlay = rememberGiftOverlayState(stream.roomId)
+    val luckyToast = rememberGiftLuckyToasts()
     var swipeY by remember { mutableStateOf(0f) }
     var chatDraft by remember { mutableStateOf("") }
     // The composer starts as a comment bubble; tapping it opens the field.
@@ -835,6 +838,11 @@ internal fun LiveViewerScreen(
 
         // Someone with an entrance effect walking in — same layer as gifts.
         EntranceOverlay(roomId = stream.roomId, copy = copy)
+
+        // A gift I sent just drew a random-reward win — over the chrome.
+        luckyToast?.let { ev ->
+            GiftLuckyToastView(copy, ev, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = rdp(62), start = rdp(16), end = rdp(16)))
+        }
 
         // A game win somewhere on the platform — a short centered strip.
         GameWinOverlay(roomId = stream.roomId, copy = copy)

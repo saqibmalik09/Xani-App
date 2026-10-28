@@ -161,6 +161,7 @@ class Copy(private val lang: String) {
         const val GiftingShow = "gifting.show"
         const val GiftingLive = "gifting.live"
         const val GiftingCashback = "gifting.cashback"
+        const val GiftingLuckyWon = "gifting.lucky_won"
         const val LiveStickers = "live.stickers"
         const val LiveStickerTo = "live.sticker_to"
         const val LiveStickerSentLine = "live.sticker_sent_line"
@@ -1668,6 +1669,7 @@ private val En = mapOf(
     Copy.GiftingShow to "Show",
     Copy.GiftingLive to "LIVE",
     Copy.GiftingCashback to "+{n} back",
+    Copy.GiftingLuckyWon to "You won {n} coins back!",
     Copy.LiveStickers to "Stickers",
     Copy.LiveStickerTo to "To",
     Copy.LiveStickerSentLine to "sent {to} a sticker",

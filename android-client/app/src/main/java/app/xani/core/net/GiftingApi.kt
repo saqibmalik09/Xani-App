@@ -217,6 +217,12 @@ data class GiftingUserEvent(
     val coins: Long,
     val diamonds: Long,
     val cashbackCoins: Long,
+    // randomWinCoins/randomWinMessage: set only when this send (a "gift_sent"
+    // frame) drew a win from an admin-configured random-reward policy;
+    // 0/"" on every other gift, which is almost all of them until a policy
+    // is turned on for that gift's category.
+    val randomWinCoins: Long,
+    val randomWinMessage: String,
     val todayDiamonds: Long,
     val todayCount: Long,
     val todayCoins: Long,
@@ -236,6 +242,8 @@ data class GiftingUserEvent(
             coins = json.long("coins"),
             diamonds = json.long("diamonds"),
             cashbackCoins = json.long("cashback_coins"),
+            randomWinCoins = json.long("random_win_coins"),
+            randomWinMessage = json.str("random_win_message"),
             todayDiamonds = json.long("today_diamonds"),
             todayCount = json.long("today_count"),
             todayCoins = json.long("today_coins"),
